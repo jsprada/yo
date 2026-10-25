@@ -170,7 +170,7 @@ rate rule, and the `[limits]` reference in §4.
 
 ## 2. Phase 2 (2026-10-26)
 
-Commit: `<pending>` ("Phase 2 remediation"; see git history). Plan items
+Commit: `feca4b8` ("Phase 2 remediation: fallback rotation, link confirmation, reg throttling"). Plan items
 2.1–2.6 of the review. Verification tests are in `crates/yo-cli/tests/limits.rs`
 (Phase 2 section) and the crates' unit tests, and run in CI on every push.
 
