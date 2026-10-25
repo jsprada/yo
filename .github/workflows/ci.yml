@@ -4,17 +4,17 @@ on:
   push:
   pull_request:
 
+permissions:
+  contents: read
+
 env:
   CARGO_TERM_COLOR: always
 
 jobs:
-  test:
-    name: test (${{ matrix.os }})
-    runs-on: ${{ matrix.os }}
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [ubuntu-latest, macos-latest, windows-latest]
+  # The server targets Linux only; the full workspace is tested here.
+  test-linux:
+    name: test (ubuntu, server + client)
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -22,10 +22,28 @@ jobs:
           components: clippy, rustfmt
       - uses: Swatinem/rust-cache@v2
       - run: cargo fmt --all --check
-        if: matrix.os == 'ubuntu-latest'
       - run: cargo clippy --workspace --all-targets -- -D warnings
       - run: cargo test --workspace
       - run: cargo build --release --workspace
+
+  # The client is supported on macOS and Windows as well.
+  test-client:
+    name: client (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo clippy -p yo-cli --all-targets -- -D warnings
+      # The e2e tests start an in-process server, which builds fine on any OS.
+      - run: cargo test -p yo-cli -p yo-store -p yo-crypto -p yo-proto
+      - run: cargo build --release -p yo-cli
 
   shells:
     name: prompt snippets (bash, zsh, fish)
@@ -71,6 +89,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: rustsec/audit-check@v2
-        with:
-          token: ${{ secrets.GITHUB_TOKEN }}
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo install cargo-audit --locked
+      # Fails on known vulnerabilities; "unmaintained" advisories are reported but not fatal.
+      - run: cargo audit --deny unsound --deny yanked

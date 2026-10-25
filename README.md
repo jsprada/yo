@@ -70,7 +70,7 @@ mdbook serve docs        # http://localhost:3000
 - [Install & set up a client](docs/src/client/install.md)
 - [Adding contacts](docs/src/client/contacts.md)
 - [Messaging](docs/src/client/messaging.md) · [Prompt indicator](docs/src/client/prompt.md) · [Daemon](docs/src/client/daemon.md) · [Devices](docs/src/client/devices.md) · [Burn](docs/src/client/burn.md)
-- [Command reference](docs/src/reference/commands.md) · [Security model](docs/src/reference/security.md) · [Protocol](docs/src/reference/protocol.md)
+- [Command reference](docs/src/reference/commands.md) · [Security model](docs/src/reference/security.md) · [Security review](SECURITY_REVIEW.md) · [Protocol](docs/src/reference/protocol.md)
 
 ## Repository layout
 

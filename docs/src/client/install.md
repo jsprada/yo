@@ -2,7 +2,8 @@
 
 ## 1. Get the `yo` binary
 
-From source (Rust 1.85 or newer, on Linux, macOS or Windows):
+From source (Rust 1.85 or newer, on Linux, macOS or Windows; the client
+is built and tested on all three in CI):
 
 ```sh
 git clone https://github.com/jsprada/yo && cd yo

@@ -6,6 +6,24 @@ All notable changes to yo! are recorded here. The format follows
 
 ## [Unreleased]
 
+### Added
+
+- `SECURITY_REVIEW.md`: a security review of 0.1.0 (threat model, findings
+  H-1 … I-1, OWASP/CWE coverage, business-logic review, remediation plan).
+  Also published in the docs under Reference.
+
+### Changed
+
+- The server is supported on Linux only; the client is built and tested on
+  Linux, macOS and Windows. CI now reflects that.
+- The dependency audit in CI runs `cargo audit` directly and fails only on
+  vulnerabilities (not on "unmaintained" advisories).
+
+### Fixed
+
+- Windows build: the Unix-only prompt-snippet test module no longer trips
+  `unused_imports` under `-D warnings`.
+
 ## [0.1.0] - 2026-10-25
 
 First version.

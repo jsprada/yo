@@ -9,7 +9,9 @@ cheap VPS without having to trust the host with your conversations. See
 
 ## Requirements
 
-- Any Linux, macOS or Windows machine with a public IP or DNS name.
+- A Linux machine with a public IP or DNS name. (The server is only
+  built and tested for Linux; the `yo` client runs on Linux, macOS and
+  Windows.)
 - One open TCP port (default **7443**).
 - About 10 MB of RAM per few hundred users, and a little disk for queued
   ciphertext.

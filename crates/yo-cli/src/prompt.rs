@@ -109,12 +109,11 @@ function global:prompt {{
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, unix))]
 mod tests {
     use super::*;
 
     #[test]
-    #[cfg(unix)]
     fn bash_snippet_runs() {
         // Smoke-test the bash snippet when bash is available.
         let Ok(out) = std::process::Command::new("bash").arg("--version").output() else { return };

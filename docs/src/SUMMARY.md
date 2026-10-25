@@ -22,6 +22,7 @@
 - [Commands](reference/commands.md)
 - [Files & settings](reference/files.md)
 - [Security model](reference/security.md)
+- [Security review & remediation plan](reference/security-review.md)
 - [Wire protocol](reference/protocol.md)
 - [Troubleshooting](troubleshooting.md)
 - [Changelog](changelog.md)
