@@ -18,7 +18,8 @@ use yo_store::{
 
 use crate::net::{Conn, ServerError, is_code};
 use crate::payload::{
-    AddPayload, Body, ContactSecret, LinkHello, LinkPayload, Payload, SyncEvent, burn_signing_bytes, new_uuid,
+    AddPayload, Body, ContactSecret, LinkHello, LinkPayload, Payload, RekeySecret, SyncEvent, burn_signing_bytes,
+    new_uuid, rekey_signing_bytes,
 };
 
 /// One-time keys published per relationship, and the refill threshold.
@@ -44,7 +45,7 @@ const SEND_CHUNK_BYTES: usize = 1024 * 1024;
 /// Names that cannot be used for contacts because they are commands.
 pub const RESERVED: &[&str] = &[
     "init", "add", "read", "reply", "history", "contacts", "rename", "burn", "verify", "link", "devices", "unlock",
-    "lock", "daemon", "prompt", "status", "sync", "passwd", "help", "me", "version",
+    "lock", "daemon", "prompt", "status", "sync", "passwd", "help", "me", "version", "rekey",
 ];
 
 pub struct InitOptions {
@@ -181,18 +182,20 @@ impl Client {
         let mut c = Self::prepare(paths, &opts).await?;
         c.create_relationship(RelKind::Myself, "me".into(), Rik::generate(), None, true, now()).await?;
         c.finish_setup()?;
-        let _ = c.bind_revocation().await;
+        let _ = c.bind_revocation(None).await;
         Ok(c)
     }
 
     /// Tell the server which key may later deregister this device (our own
     /// account's self-identity key). First write wins on the server, so a
     /// stolen device cannot rebind it. Best-effort: retried on later syncs.
-    async fn bind_revocation(&mut self) -> anyhow::Result<()> {
+    async fn bind_revocation(&mut self, prev: Option<&Rik>) -> anyhow::Result<()> {
         let rik = self.myself()?.bundle.rik();
         let authority = rik.public();
-        let sig = rik.sign(&yo_proto::msg::BindRevocation::signing_bytes(&self.me, &authority));
-        self.call(Request::BindRevocation(yo_proto::msg::BindRevocation { authority, sig })).await?;
+        let bytes = yo_proto::msg::BindRevocation::signing_bytes(&self.me, &authority);
+        let sig = rik.sign(&bytes);
+        let prev_sig = prev.map(|p| p.sign(&bytes));
+        self.call(Request::BindRevocation(yo_proto::msg::BindRevocation { authority, sig, prev_sig })).await?;
         Ok(())
     }
 
@@ -222,7 +225,7 @@ impl Client {
             c.join_contact(cs).await?;
         }
         c.finish_setup()?;
-        let _ = c.bind_revocation().await;
+        let _ = c.bind_revocation(None).await;
         Ok(c)
     }
 
@@ -293,6 +296,7 @@ impl Client {
             my_devices: vec![],
             peer_devices: vec![],
             fallback_at: now(),
+            prev_inbox: None,
         };
         let mut olm = OlmState::new();
         let mut rel = self.store.insert_relationship(bundle, &olm)?;
@@ -538,15 +542,21 @@ impl Client {
         let report = match self.send_payload(&mut rel, &payload, true).await {
             Ok(r) => r,
             Err(e) if is_code(&e, ErrorCode::Burned) => {
-                // Pick up a pending burn notice, if there is one.
+                // Either the contact burned it, or they rotated keys and the
+                // old inbox is gone: sync to find out, then retry once.
+                let before = rel.bundle.peer_inbox();
                 let _ = self.sync().await;
-                if self.contact(name).is_err() {
-                    bail!("{name} burned this conversation; nothing was sent");
+                match self.contact(name) {
+                    Err(_) => bail!("{name} burned this conversation; nothing was sent"),
+                    Ok(fresh) if fresh.bundle.peer_inbox() != before => {
+                        rel = fresh;
+                        self.send_payload(&mut rel, &payload, true).await?
+                    }
+                    Ok(_) => bail!(
+                        "the server says this conversation was burned, so nothing was sent. \
+                         If {name} burned it, `yo burn {name}` removes your copy too"
+                    ),
                 }
-                bail!(
-                    "the server says this conversation was burned, so nothing was sent. \
-                     If {name} burned it, `yo burn {name}` removes your copy too"
-                );
             }
             Err(e) => return Err(e),
         };
@@ -644,7 +654,12 @@ impl Client {
         env: &yo_proto::msg::Envelope,
         report: &mut SyncReport,
     ) -> anyhow::Result<Option<i64>> {
-        let Some(mut rel) = self.store.relationships()?.into_iter().find(|r| r.bundle.my_inbox() == env.inbox) else {
+        let Some(mut rel) = self
+            .store
+            .relationships()?
+            .into_iter()
+            .find(|r| r.bundle.my_inbox() == env.inbox || r.bundle.prev_inbox == Some(env.inbox))
+        else {
             return Ok(None); // conversation no longer exists here
         };
         let mut olm = self.store.load_olm(&rel)?;
@@ -706,11 +721,54 @@ impl Client {
                     bail!("ignored a burn request with an invalid signature");
                 }
             }
+            Body::Rekey { old_inbox, new_rik, ts, sig_old, sig_new } => {
+                // Copies from my own devices carry no secret; the device-sync
+                // event does. Only a contact's announcement is acted on.
+                if origin != Some(Origin::MyDevice) {
+                    let Some(peer) = rel.bundle.peer_rik else { bail!("re-key for an unfinished contact") };
+                    let bytes = rekey_signing_bytes(&old_inbox, &new_rik, ts);
+                    let genuine = InboxId::from_rik(&peer) == old_inbox
+                        && rik::verify(&peer, &bytes, &sig_old).is_ok()
+                        && rik::verify(&new_rik, &bytes, &sig_new).is_ok();
+                    if !genuine {
+                        bail!("ignored a re-key announcement with an invalid signature");
+                    }
+                    rel.bundle.peer_rik = Some(new_rik);
+                    rel.bundle.peer_list_version = 0;
+                    rel.bundle.peer_devices = vec![];
+                    self.store.update_bundle(&rel)?;
+                    let _ = self.refresh_lists(&mut rel).await;
+                    report.notices.push(format!("{} rotated their keys", rel.bundle.nickname));
+                }
+            }
             Body::Sync(ev) => {
                 if rel.bundle.kind != RelKind::Myself || origin != Some(Origin::MyDevice) {
                     bail!("ignored a sync message that did not come from one of my devices");
                 }
                 match ev {
+                    SyncEvent::Rekeyed(secret) => {
+                        if let Some(mut r) =
+                            self.store.relationships()?.into_iter().find(|r| r.bundle.my_inbox() == secret.old_inbox)
+                        {
+                            let old_rik = r.bundle.rik();
+                            r.bundle.rik_secret = secret.new_rik_secret;
+                            r.bundle.prev_inbox = Some(secret.old_inbox);
+                            r.bundle.my_list_version = 0;
+                            r.bundle.my_devices = vec![];
+                            self.store.update_bundle(&r)?;
+                            let _ = self.refresh_lists(&mut r).await;
+                            // My keys were published under the old inbox id.
+                            let mut olm = self.store.load_olm(&r)?;
+                            let _ = self.rotate_fallback(&mut r, &mut olm).await;
+                            if r.bundle.kind == RelKind::Myself {
+                                let _ = self.bind_revocation(Some(&old_rik)).await;
+                            }
+                            self.refresh_unread();
+                            report
+                                .notices
+                                .push(format!("keys for {} rotated (from another device)", r.bundle.nickname));
+                        }
+                    }
                     SyncEvent::ContactAdded(cs) => {
                         let name = cs.nickname.clone();
                         if self.join_contact(&cs).await?.is_some() {
@@ -1015,7 +1073,7 @@ impl Client {
     }
 
     /// Remove a device (by id prefix) from every relationship.
-    pub async fn remove_device(&mut self, prefix: &str) -> anyhow::Result<DeviceEntry> {
+    pub async fn remove_device(&mut self, prefix: &str, rekey: bool) -> anyhow::Result<DeviceEntry> {
         let devices = self.devices().await?;
         let p = prefix.to_ascii_lowercase();
         let matches: Vec<&DeviceEntry> = devices.iter().filter(|d| d.device.to_string().starts_with(&p)).collect();
@@ -1058,7 +1116,106 @@ impl Client {
                 }
             }
         }
+        if rekey {
+            // The removed device still holds every conversation's identity
+            // key; rotating them is what finally makes those copies useless.
+            self.rekey_all().await?;
+        }
         Ok(target)
+    }
+
+    // ── re-keying (SECURITY_REVIEW.md L-3) ───────────────────────────────
+
+    /// `yo rekey NAME`: rotate the identity key of one conversation.
+    pub async fn rekey_contact(&mut self, name: &str) -> anyhow::Result<()> {
+        let mut rel = self.contact(name)?;
+        if rel.bundle.peer_rik.is_none() {
+            bail!("'{name}' has not finished the key exchange");
+        }
+        self.rekey_relationship(&mut rel).await
+    }
+
+    /// `yo rekey --all`: every conversation, then the device-sync key.
+    /// Returns how many keys were rotated.
+    pub async fn rekey_all(&mut self) -> anyhow::Result<usize> {
+        let mut n = 0;
+        for mut rel in self.contacts()? {
+            if rel.bundle.peer_rik.is_none() {
+                continue;
+            }
+            self.rekey_relationship(&mut rel).await?;
+            n += 1;
+        }
+        let mut me = self.myself()?;
+        self.rekey_relationship(&mut me).await?;
+        Ok(n + 1)
+    }
+
+    /// Replace a relationship's identity key with a fresh one.
+    ///
+    /// 1. open a new inbox (listing my current devices) and publish keys there;
+    /// 2. announce the new public key to the contact, signed by old and new;
+    /// 3. hand the new secret to my other devices over device sync;
+    /// 4. switch locally, rebinding this device's revocation authority if
+    ///    this was the device-sync key;
+    /// 5. retire the old inbox (what was queued there still arrives).
+    async fn rekey_relationship(&mut self, rel: &mut Relationship) -> anyhow::Result<()> {
+        let _ = self.refresh_lists(rel).await;
+        let old_rik = rel.bundle.rik();
+        let old_inbox = old_rik.inbox();
+        let new_rik = Rik::generate();
+        let new_inbox = new_rik.inbox();
+        let ts = now();
+
+        let mut olm = self.store.load_olm(rel)?;
+        let mut devices = rel.bundle.my_devices.clone();
+        if !devices.iter().any(|d| d.device == self.me) {
+            devices.push(olm.device_entry(self.spki, ts));
+        }
+        let list = DeviceList { inbox: new_inbox, version: 1, devices };
+        self.call(Request::PutDeviceList(sign_list(&new_rik, list.clone()))).await?;
+        // One-time keys are signed over the inbox id, so publish a fresh set.
+        let (one_time, fallback) = olm.prekeys(&new_inbox, PREKEY_BATCH, true);
+        self.store.save_olm(rel, &olm)?;
+        drop(olm);
+        self.call(Request::PublishKeys { inbox: new_inbox, one_time, fallback }).await?;
+
+        if rel.bundle.kind == RelKind::Contact {
+            let bytes = rekey_signing_bytes(&old_inbox, &new_rik.public(), ts);
+            let body = Body::Rekey {
+                old_inbox,
+                new_rik: new_rik.public(),
+                ts,
+                sig_old: old_rik.sign(&bytes),
+                sig_new: new_rik.sign(&bytes),
+            };
+            self.send_payload(rel, &Payload { uuid: new_uuid(), sent_at: ts, body }, true).await?;
+        }
+
+        let secret = RekeySecret { old_inbox, new_rik_secret: *new_rik.secret() };
+        if rel.bundle.kind == RelKind::Myself {
+            // Over the *old* device-sync channel, before switching it.
+            let p = Payload { uuid: new_uuid(), sent_at: ts, body: Body::Sync(SyncEvent::Rekeyed(secret)) };
+            let _ = self.send_payload(rel, &p, false).await;
+        } else {
+            self.sync_to_my_devices(SyncEvent::Rekeyed(secret)).await;
+        }
+
+        rel.bundle.rik_secret = *new_rik.secret();
+        rel.bundle.prev_inbox = Some(old_inbox);
+        rel.bundle.my_list_version = list.version;
+        rel.bundle.my_devices = list.devices;
+        rel.bundle.fallback_at = ts;
+        self.store.update_bundle(rel)?;
+        self.refresh_unread();
+
+        if rel.bundle.kind == RelKind::Myself {
+            let _ = self.bind_revocation(Some(&old_rik)).await;
+        }
+
+        let sig = old_rik.sign(&DeleteInbox::signing_bytes(&old_inbox, ts));
+        let _ = self.call(Request::DeleteInbox(DeleteInbox { inbox: old_inbox, ts, rik: old_rik.public(), sig })).await;
+        Ok(())
     }
 
     // ── contacts ─────────────────────────────────────────────────────────

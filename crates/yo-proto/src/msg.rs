@@ -90,6 +90,11 @@ impl DeleteInbox {
 pub struct BindRevocation {
     pub authority: [u8; 32],
     pub sig: Vec<u8>,
+    /// When replacing an existing authority: the *current* authority's
+    /// signature over the same bytes, proving the holder of the old key
+    /// approves the new one.
+    #[serde(default)]
+    pub prev_sig: Option<Vec<u8>>,
 }
 
 impl BindRevocation {

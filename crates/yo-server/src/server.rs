@@ -75,6 +75,9 @@ pub struct Server {
     device_conns: Mutex<HashMap<DeviceId, u32>>,
     /// Bytes sent per device in the current hour.
     send_bytes: Mutex<HashMap<DeviceId, (Instant, u64)>>,
+    /// Devices deregistered while they may still hold open connections; those
+    /// connections are refused at their next request. Cleared on re-registration.
+    revoked: Mutex<std::collections::HashSet<DeviceId>>,
     metrics: Metrics,
     limits: Limits,
     registration: Registration,
@@ -148,6 +151,7 @@ impl Server {
             ips: Mutex::new(HashMap::new()),
             device_conns: Mutex::new(HashMap::new()),
             send_bytes: Mutex::new(HashMap::new()),
+            revoked: Mutex::new(std::collections::HashSet::new()),
             metrics: Metrics::default(),
             limits: cfg.limits.clone(),
             registration: cfg.registration,
@@ -313,6 +317,11 @@ impl Server {
                         Ok(Ok(req)) => req,
                         _ => break,
                     };
+                    if self.revoked.lock().expect("revoked lock").contains(&device) {
+                        let resp = err(ErrorCode::Unauthorized, "this device was deregistered");
+                        let _ = conn.send(&ServerFrame::Response(resp)).await;
+                        break;
+                    }
                     if matches!(req, Request::Subscribe) && !subscribed {
                         subscribed = true;
                         self.subs.lock().expect("subs lock").entry(device).or_default().push(tx.clone());
@@ -367,6 +376,7 @@ impl Server {
         };
         match registered {
             Ok(true) => {
+                self.revoked.lock().expect("revoked lock").remove(device);
                 info!("registered new device {} from {ip}", device.short());
                 Response::Hello { version: PROTOCOL_VERSION, device: *device }
             }
@@ -422,18 +432,27 @@ impl Server {
             Request::DeleteInbox(d) => self.delete_inbox(d).await,
             Request::BindRevocation(b) => {
                 let authority = b.authority;
-                let sig = b.sig;
-                if yo_crypto::rik::verify(
-                    &authority,
-                    &yo_proto::msg::BindRevocation::signing_bytes(&me, &authority),
-                    &sig,
-                )
-                .is_err()
-                {
+                let bytes = yo_proto::msg::BindRevocation::signing_bytes(&me, &authority);
+                if yo_crypto::rik::verify(&authority, &bytes, &b.sig).is_err() {
                     return err(ErrorCode::Unauthorized, "bad signature");
                 }
                 // A device binds only its *own* authority (caller == device).
-                match self.db.run(move |db| db.bind_revocation(&me, &authority)).await {
+                let stored = match self.db.run(move |db| db.revocation_of(&me)).await {
+                    Ok(s) => s,
+                    Err(e) => return internal(e),
+                };
+                let result = match stored {
+                    None => self.db.run(move |db| db.bind_revocation(&me, &authority)).await,
+                    Some(cur) if cur == authority => Ok(()),
+                    // Rotation: the current authority must approve the new one.
+                    Some(cur) => match b.prev_sig.as_deref() {
+                        Some(ps) if yo_crypto::rik::verify(&cur, &bytes, ps).is_ok() => {
+                            self.db.run(move |db| db.rebind_revocation(&me, &authority)).await
+                        }
+                        _ => return err(ErrorCode::Unauthorized, "a revocation authority is already bound"),
+                    },
+                };
+                match result {
                     Ok(()) => Response::Ok,
                     Err(e) => internal(e),
                 }
@@ -676,6 +695,8 @@ impl Server {
         }
         match self.db.run(move |db| db.deregister(&device)).await {
             Ok(()) => {
+                self.revoked.lock().expect("revoked lock").insert(device);
+                self.subs.lock().expect("subs lock").remove(&device);
                 info!("deregistered device {}", device.short());
                 Response::Ok
             }

@@ -449,7 +449,7 @@ async fn device_deregistration_is_authorized_and_cuts_off_access() {
 
     // alice removes alice2 → it leaves every device list and its registration
     // is revoked (the lock-out is asserted in token mode below).
-    alice.remove_device(&alice2.me.to_string()[..8]).await.unwrap();
+    alice.remove_device(&alice2.me.to_string()[..8], false).await.unwrap();
     assert_eq!(alice.devices().await.unwrap().len(), 1);
 }
 
@@ -495,4 +495,142 @@ async fn additional_pins_are_accepted() {
     // Neither pin matching is refused.
     cfg.extra_pins = vec![tls::format_pin(&[8u8; 32])];
     assert!(Conn::connect(&alice.paths, &cfg, None).await.is_err(), "no matching pin is refused");
+}
+
+// ── L-3 re-keying ────────────────────────────────────────────────────────
+
+async fn unread_bodies(c: &mut Client) -> Vec<String> {
+    let r = c.sync().await.unwrap();
+    assert!(r.offline.is_none(), "{:?}", r.offline);
+    c.take_unread().unwrap().into_iter().map(|(row, _)| row.msg.body.clone()).collect()
+}
+
+async fn link_second_device(s: &TestServer, c: &mut Client) -> (Client, tempfile::TempDir) {
+    let (tx, rx) = tokio::sync::oneshot::channel::<String>();
+    let home = tempfile::tempdir().unwrap();
+    let o = opts(s);
+    let path = home.path().to_path_buf();
+    let linker = c.link_open(move |code| tx.send(code.to_string()).unwrap(), |_| true);
+    let joiner = async {
+        let code = rx.await.unwrap();
+        Client::init_linked(Paths::at(&path), o, &code, |_| {}).await
+    };
+    let (_, c2) = tokio::join!(linker, joiner);
+    (c2.unwrap(), home)
+}
+
+fn self_rik(c: &Client) -> yo_crypto::rik::Rik {
+    c.store
+        .relationships()
+        .unwrap()
+        .into_iter()
+        .find(|r| r.bundle.kind == yo_store::RelKind::Myself)
+        .unwrap()
+        .bundle
+        .rik()
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn removing_a_device_rotates_every_conversation_key() {
+    let s = server_with(|_| {}).await;
+    let mut homes = Vec::new();
+    let mut alice = client(&s, &mut homes).await;
+    let mut bob = client(&s, &mut homes).await;
+    befriend(&mut alice, "bob", &mut bob, "alice").await;
+    let (mut alice2, _h) = link_second_device(&s, &mut alice).await;
+    bob.send_text("alice", "before", None).await.unwrap();
+    assert_eq!(unread_bodies(&mut alice).await, vec!["before"]);
+    assert_eq!(unread_bodies(&mut alice2).await, vec!["before"]);
+
+    let old_inbox = alice.contact("bob").unwrap().bundle.my_inbox();
+    let old_self_inbox = self_rik(&alice).inbox();
+    // What a thief with the removed device would hold:
+    let stale_rik = alice2.contact("bob").unwrap().bundle.rik();
+
+    alice.remove_device(&alice2.me.to_string()[..8], true).await.unwrap();
+
+    let rel = alice.contact("bob").unwrap();
+    assert_ne!(rel.bundle.my_inbox(), old_inbox, "contact key rotated");
+    assert_eq!(rel.bundle.prev_inbox, Some(old_inbox));
+    assert_ne!(self_rik(&alice).inbox(), old_self_inbox, "device-sync key rotated");
+
+    // The removed device's live connection is cut.
+    assert!(alice2.ping().await.is_err(), "deregistered device keeps no live session");
+
+    // Bob picks up the new key on his next sync; both directions work.
+    let r = bob.sync().await.unwrap();
+    assert!(r.notices.iter().any(|n| n.contains("rotated")), "{:?}", r.notices);
+    assert_eq!(bob.contact("alice").unwrap().bundle.peer_inbox(), Some(rel.bundle.my_inbox()));
+    bob.send_text("alice", "after", None).await.unwrap();
+    assert_eq!(unread_bodies(&mut alice).await, vec!["after"]);
+    alice.send_text("bob", "and back", None).await.unwrap();
+    assert_eq!(unread_bodies(&mut bob).await, vec!["and back"]);
+
+    // The thief reconnects (open registration lets it re-register), but the
+    // old key cannot touch the new inbox and nothing new is delivered.
+    let paths = alice2.paths.clone();
+    drop(alice2);
+    let dk = Client::unlock(&paths, "test passphrase").unwrap();
+    let mut alice2 = Client::open(paths, dk).unwrap();
+    let mut a2conn = raw(&alice2).await.unwrap();
+    let list =
+        yo_proto::msg::DeviceList { inbox: rel.bundle.my_inbox(), version: 2, devices: vec![entry(spki_of(&alice2))] };
+    let e = a2conn
+        .call(Request::PutDeviceList(yo_crypto::devices::sign_list(&stale_rik, list)))
+        .await
+        .expect_err("the old key is useless against the new inbox");
+    assert!(is_code(&e, ErrorCode::Unauthorized), "{e:#}");
+    let r = alice2.sync().await.unwrap();
+    assert_eq!(r.new_messages, 0);
+    assert!(alice2.take_unread().unwrap().is_empty());
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_contact_who_sends_before_syncing_recovers_after_a_rekey() {
+    let s = server_with(|_| {}).await;
+    let mut homes = Vec::new();
+    let mut alice = client(&s, &mut homes).await;
+    let mut bob = client(&s, &mut homes).await;
+    befriend(&mut alice, "bob", &mut bob, "alice").await;
+    alice.rekey_contact("bob").await.unwrap();
+    // Bob hasn't synced: his send hits the retired inbox, syncs, and retries.
+    bob.send_text("alice", "still works", None).await.unwrap();
+    assert_eq!(unread_bodies(&mut alice).await, vec!["still works"]);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn messages_queued_before_a_rekey_still_arrive() {
+    let s = server_with(|_| {}).await;
+    let mut homes = Vec::new();
+    let mut alice = client(&s, &mut homes).await;
+    let mut bob = client(&s, &mut homes).await;
+    befriend(&mut alice, "bob", &mut bob, "alice").await;
+    bob.send_text("alice", "in flight", None).await.unwrap(); // queued for the old inbox
+    alice.rekey_contact("bob").await.unwrap(); // without reading first
+    assert_eq!(unread_bodies(&mut alice).await, vec!["in flight"]);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn rekeying_rotates_the_revocation_authority() {
+    let s = server_with(|_| {}).await;
+    let mut homes = Vec::new();
+    let mut alice = client(&s, &mut homes).await;
+    let (mut alice2, _h) = link_second_device(&s, &mut alice).await;
+    let old_self = self_rik(&alice);
+
+    alice.rekey_all().await.unwrap();
+    let r = alice2.sync().await.unwrap();
+    assert!(r.notices.iter().any(|n| n.contains("rotated")), "{:?}", r.notices);
+    assert_eq!(self_rik(&alice2).public(), self_rik(&alice).public(), "alice2 adopted the new device-sync key");
+
+    // The old authority can no longer deregister a device…
+    let mut conn = raw(&alice).await.unwrap();
+    let ts = yo_proto::now();
+    let sig = old_self.sign(&yo_proto::msg::Deregister::signing_bytes(&alice2.me, ts));
+    let stale = yo_proto::msg::Deregister { device: alice2.me, ts, authority: old_self.public(), sig };
+    let e = conn.call(Request::Deregister(stale)).await.expect_err("old authority is refused");
+    assert!(is_code(&e, ErrorCode::Unauthorized), "{e:#}");
+    // …but a normal removal, signed with the new one, works.
+    alice.remove_device(&alice2.me.to_string()[..8], false).await.unwrap();
+    assert_eq!(alice.devices().await.unwrap().len(), 1);
 }

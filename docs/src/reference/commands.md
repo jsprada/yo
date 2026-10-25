@@ -89,7 +89,23 @@ List your devices.
 
 ### `yo devices remove <id>`
 
-Remove a device (id or its first characters) from every conversation.
+Remove a device (id or its first characters) from every conversation,
+deregister it on the server, and rotate every conversation key so the
+copies it holds become useless. → [Devices](../client/devices.md)
+
+| Option | |
+|---|---|
+| `--no-rekey` | Skip the key rotation (not recommended after a loss). |
+
+### `yo rekey [name]`
+
+Rotate the identity key of one conversation (`yo rekey bob`), or of every
+conversation plus your device-sync key (`yo rekey --all`). Contacts pick the
+new key up on their next sync; nothing is interrupted.
+
+| Option | |
+|---|---|
+| `--all` | Every conversation and the device-sync key. |
 
 ### `yo unlock`
 

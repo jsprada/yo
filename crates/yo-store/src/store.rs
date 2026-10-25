@@ -284,6 +284,7 @@ mod tests {
             my_devices: vec![],
             peer_devices: vec![],
             fallback_at: 0,
+            prev_inbox: None,
         }
     }
 

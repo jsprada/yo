@@ -26,7 +26,9 @@ For contributors and the curious. Source: `crates/yo-proto`.
 | `Send { inbox, envelopes[] }` | Each envelope is `{device, blob}` and must target a device in the inbox's list. |
 | `Fetch` / `Ack { ids }` | Download / delete queued envelopes. |
 | `Subscribe` | Push new envelopes on this connection. |
-| `DeleteInbox { inbox, ts, rik, sig }` | Burn: signed by the inbox's RIK. |
+| `DeleteInbox { inbox, ts, rik, sig }` | Burn or retire an inbox: signed by the inbox's RIK. |
+| `BindRevocation { authority, sig, prev_sig? }` | Record which key may deregister the calling device; first write wins, and replacing it needs the current authority's `prev_sig`. |
+| `Deregister { device, ts, authority, sig }` | Remove a device's registration, memberships, keys and queue; only the bound authority may. |
 | `MailboxOpen` / `MailboxJoin` / `MailboxPut` / `MailboxGet` / `MailboxClose` | Invite rendezvous (single joiner, long-poll get, 10-minute TTL). |
 | `Ping` | Keep-alive. |
 
@@ -44,6 +46,9 @@ All signatures are Ed25519 over a domain-separated byte string:
 | One-time key | `"yo/prekey/v1" ‖ inbox ‖ curve25519 ‖ fallback` | device's Olm Ed25519 |
 | Delete inbox | `"yo/delete-inbox/v1" ‖ inbox ‖ ts(be64)` | RIK |
 | Burn notice (inside E2E payload) | `"yo/burn/v1" ‖ inbox ‖ ts(be64)` | RIK |
+| Re-key notice (inside E2E payload) | `"yo/rekey/v1" ‖ old inbox ‖ new RIK pub ‖ ts(be64)` | old RIK **and** new RIK |
+| Bind revocation | `"yo/bind-revocation/v1" ‖ device ‖ authority` | authority (and the previous authority when replacing) |
+| Deregister | `"yo/deregister/v1" ‖ device ‖ ts(be64)` | the device's bound authority |
 
 ## Envelope contents
 
@@ -56,7 +61,8 @@ struct Payload { uuid: [u8; 16], sent_at: u64, body: Body }
 enum Body {
     Text { text: String, reply_to: Option<[u8; 16]> },
     Burn { inbox, ts, sig },
-    Sync(SyncEvent),          // ContactAdded | Renamed — own devices only
+    Rekey { old_inbox, new_rik, ts, sig_old, sig_new },
+    Sync(SyncEvent),          // ContactAdded | Renamed | Rekeyed — own devices only
 }
 ```
 

@@ -70,6 +70,13 @@ devices.
   guess aborts the exchange visibly on both sides.
 - **Safety words** (`yo verify`) are derived from both RIK public keys, so
   you can re-check out of band at any time.
+- **Key rotation.** A conversation's RIK can be replaced at any time
+  (`yo rekey`): the announcement is signed by the old, pinned key *and* the
+  new one, so the contact re-pins only a key the previous holder vouched for
+  and that provably exists. The old inbox is retired; messages already
+  queued there still arrive. Your other devices get the new secret over
+  device sync; the device-sync key itself rotates the same way, which also
+  rotates the key that authorizes deregistering your devices.
 - **Devices.** Each inbox has a **device list** signed by its RIK, with a
   version number. Clients accept a list only if it's signed by the pinned key
   and its version isn't lower than one they've already seen (no rollback).
@@ -157,14 +164,13 @@ period so in-flight session setups still decrypt.
 
 ## Known limitations
 
-- **Stolen device with known passphrase.** Every one of your devices holds
-  your conversations' RIKs, so a thief who can unlock one could keep using
-  it. `yo devices remove` deregisters the device on the server (cutting off a
-  *locked* stolen device completely) and removes it from every device list,
-  but a thief who knows the passphrase still holds the keys; burning the
-  important conversations and re-adding those contacts is the remedy, because
-  that rotates the keys. See [Devices](../client/devices.md). Full automatic
-  re-keying on removal is future work.
+- **Stolen device.** Every one of your devices holds your conversations'
+  RIKs. `yo devices remove` deregisters the device on the server (cutting off
+  its access, including any session it still has open), removes it from every
+  device list, and **rotates every conversation key**, so the copies it holds
+  stop working. The window that remains is between the theft and your
+  running the removal: a thief who can unlock the device could use it, or
+  even rotate keys first, until then. See [Devices](../client/devices.md).
 - **Modified clients** can ignore burn requests. No messenger can prevent
   this.
 - **The agent** hands the key to any process running as your user while

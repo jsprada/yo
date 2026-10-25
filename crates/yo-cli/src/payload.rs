@@ -25,12 +25,40 @@ pub enum Body {
     },
     /// Sync between my own devices (only accepted on the Myself relationship).
     Sync(SyncEvent),
+    /// "My identity key for this conversation is now `new_rik`." Signed by
+    /// the old key the contact has pinned (`sig_old`) and by the new key
+    /// (`sig_new`, proof of possession). SECURITY_REVIEW.md L-3.
+    Rekey {
+        old_inbox: InboxId,
+        new_rik: [u8; 32],
+        ts: u64,
+        sig_old: Vec<u8>,
+        sig_new: Vec<u8>,
+    },
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum SyncEvent {
     ContactAdded(ContactSecret),
-    Renamed { inbox: InboxId, nickname: String },
+    Renamed {
+        inbox: InboxId,
+        nickname: String,
+    },
+    /// One of my devices rotated a relationship's identity key: adopt it.
+    Rekeyed(RekeySecret),
+}
+
+/// The new secret for a re-keyed relationship, identified by its old inbox.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct RekeySecret {
+    pub old_inbox: InboxId,
+    pub new_rik_secret: [u8; 32],
+}
+
+impl Drop for RekeySecret {
+    fn drop(&mut self) {
+        zeroize::Zeroize::zeroize(&mut self.new_rik_secret);
+    }
 }
 
 /// What one of my devices needs to join a relationship.
@@ -77,6 +105,14 @@ pub struct LinkHello {
 pub fn burn_signing_bytes(inbox: &InboxId, ts: u64) -> Vec<u8> {
     let mut out = b"yo/burn/v1".to_vec();
     out.extend_from_slice(&inbox.0);
+    out.extend_from_slice(&ts.to_be_bytes());
+    out
+}
+
+pub fn rekey_signing_bytes(old_inbox: &InboxId, new_rik: &[u8; 32], ts: u64) -> Vec<u8> {
+    let mut out = b"yo/rekey/v1".to_vec();
+    out.extend_from_slice(&old_inbox.0);
+    out.extend_from_slice(new_rik);
     out.extend_from_slice(&ts.to_be_bytes());
     out
 }

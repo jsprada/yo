@@ -22,7 +22,7 @@ Status is one of *Open*, *Fixed*, *Mitigated* (risk reduced, residual noted),
 | M-6 | *(new)* Large backlogs exceeded the frame limit and stalled delivery | Medium | **Fixed** | 2026-10-25 | [§1.4](#14-m-6-new-fetch-responses-could-exceed-the-frame-limit) |
 | L-1 | Device lists may name devices that never joined | Low | **Fixed** | 2026-10-26 | [§2.4](#24-l-1-device-lists-must-name-registered-devices) |
 | L-2 | Serialized database access | Low | **Fixed** | 2026-10-26 | [§2.5](#25-l-2-database-off-the-async-runtime) |
-| L-3 | Removed devices keep conversation keys | Low | **Mitigated** | 2026-10-26 | [§3.1](#31-l-3-device-deregistration-on-removal) |
+| L-3 | Removed devices keep conversation keys | Low | **Fixed** | 2026-10-26 | [§3.1](#31-l-3-device-deregistration-on-removal), [§4.1](#41-l-3-conversation-re-keying) |
 | L-4 | Draft written to disk in the clear | Low | **Fixed** | 2026-10-26 | [§3.2](#32-l-4-drafts-off-persistent-disk) |
 | L-5 | Sender-controlled timestamps | Low | **Fixed** | 2026-10-26 | [§3.3](#33-l-5-show-receive-time-on-skew) |
 | L-6 | Undecryptable envelopes count as unread | Low | **Fixed** | 2026-10-26 | [§2.6](#26-l-6-unread-counter-ignores-unknown-inboxes) |
@@ -394,10 +394,64 @@ monitoring.
 **Status: Open / external.** Still recommended once the project stabilizes;
 cannot be done in-tree.
 
-## 4. Still open after Phase 3
+## 4. Phase 4 — L-3 completion (2026-10-26)
 
-- **L-3 (unlocked stolen device):** full conversation re-keying on device
-  removal, so a removed device's keys stop working without a manual burn. The
-  review budgeted this at ~3 days and it remains the main outstanding security
-  improvement.
+Commit: `<pending>` ("L-3: conversation re-keying"; see git history).
+
+### 4.1 L-3: Conversation re-keying
+
+**Status: Fixed** (the unlocked-stolen-device case that §3.1 left open).
+
+**Change.** A relationship's identity key (RIK) can now be replaced:
+
+1. The rotating device opens a **new inbox** under a fresh RIK, listing its
+   current devices (minus any just removed), and publishes one-time keys for
+   it (their signatures are bound to the inbox id).
+2. It sends the contact a `Body::Rekey { old_inbox, new_rik, ts, sig_old,
+   sig_new }` over the existing Olm sessions. `sig_old` is by the key the
+   contact has pinned (continuity), `sig_new` by the new key (possession).
+   The contact verifies both plus `old_inbox == H(pinned key)`, re-pins, and
+   refetches the device list from the new inbox.
+3. It hands the new **secret** to its other devices as
+   `SyncEvent::Rekeyed` over device sync; each adopts it, refetches its list
+   and republishes keys. The announcement copy that reaches them through the
+   contact relationship carries no secret and is ignored.
+4. It switches locally, remembering the old inbox in `Bundle::prev_inbox` so
+   envelopes still queued there are accepted, then retires the old inbox
+   with `DeleteInbox`.
+5. For the device-sync relationship the same flow runs, and the device then
+   **rebinds its revocation authority** to the new key: `BindRevocation`
+   gained an optional `prev_sig`, and the server replaces a bound authority
+   only when the current authority signs for the new one.
+
+`yo devices remove` performs `rekey --all` after deregistering the device
+(`--no-rekey` opts out); `yo rekey <name>` / `--all` are available directly.
+A contact that sends before syncing hits the retired inbox (`Burned`), syncs,
+sees the re-key and retries once. The server also keeps a `revoked` set so a
+deregistered device's *open* connections are refused at their next request
+(previously only `Hello` was checked).
+
+**Verification** (`crates/yo-cli/tests/limits.rs`, "L-3 re-keying"):
+- `removing_a_device_rotates_every_conversation_key`: after removal, the
+  contact and device-sync inboxes change; the removed device's live session
+  is cut; the contact re-pins on sync and messaging works both ways; the
+  removed device, reconnecting with its old key, cannot sign into the new
+  inbox (`Unauthorized`) and receives nothing.
+- `a_contact_who_sends_before_syncing_recovers_after_a_rekey`.
+- `messages_queued_before_a_rekey_still_arrive` (the `prev_inbox` grace).
+- `rekeying_rotates_the_revocation_authority`: after `rekey --all`, the old
+  authority can no longer deregister a device and the new one can.
+
+**Residual.** The window between a theft and the owner running the removal is
+inherent: during it an attacker who can unlock the device can act, including
+rotating keys first (whoever rotates first wins, because the old key is the
+trust anchor for the announcement). Documented in the devices page with the
+advice to remove immediately. A rotation reaches a contact only once they
+sync; until then their sends to the retired inbox trigger the automatic
+sync-and-retry.
+
+## 5. Still open
+
 - **An independent audit of the protocol, the server and the storage format.**
+  Every finding from the review is now fixed or accepted; this is the one
+  remaining item, and it is external.

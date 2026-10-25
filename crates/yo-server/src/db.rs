@@ -129,6 +129,16 @@ impl Db {
         Ok(())
     }
 
+    /// Replace a device's revocation authority (the caller has verified the
+    /// current authority approved it).
+    pub fn rebind_revocation(&self, device: &DeviceId, authority: &[u8; 32]) -> rusqlite::Result<()> {
+        self.conn.execute(
+            "UPDATE registered SET revocation = ?2 WHERE device = ?1",
+            params![&device.0[..], &authority[..]],
+        )?;
+        Ok(())
+    }
+
     pub fn revocation_of(&self, device: &DeviceId) -> rusqlite::Result<Option<[u8; 32]>> {
         let v: Option<Option<Vec<u8>>> = self
             .conn

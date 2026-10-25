@@ -392,6 +392,22 @@ async fn run(cli: Cli, paths: Paths) -> anyhow::Result<()> {
             ui::ok(&format!("linked device {}", ui::accent(&id.short())));
         }
 
+        Cmd::Rekey { name, all } => {
+            let mut c = open(&paths).await?;
+            match (name, all) {
+                (Some(n), false) => {
+                    c.rekey_contact(&n).await?;
+                    ui::ok(&format!("rotated the keys of your conversation with {}", ui::name(&n)));
+                }
+                (None, true) => {
+                    let n = c.rekey_all().await?;
+                    ui::ok(&format!("rotated {n} keys (every conversation and your device-sync key)"));
+                }
+                _ => bail!("give a contact name, or --all"),
+            }
+            println!(" {}", ui::dim("Contacts pick the new key up automatically on their next sync."));
+        }
+
         Cmd::Devices { cmd } => {
             let mut c = open(&paths).await?;
             match cmd {
@@ -408,12 +424,16 @@ async fn run(cli: Cli, paths: Paths) -> anyhow::Result<()> {
                     }
                     println!(" {}", ui::dim("Remove a lost device with: yo devices remove <id>"));
                 }
-                Some(DevicesCmd::Remove { id }) => {
-                    let d = c.remove_device(&id).await?;
+                Some(DevicesCmd::Remove { id, no_rekey }) => {
+                    let d = c.remove_device(&id, !no_rekey).await?;
                     ui::ok(&format!("removed device {} from all conversations", d.device.short()));
-                    ui::warn(
-                        "if that device was stolen and its passphrase is known, also burn sensitive conversations",
-                    );
+                    if no_rekey {
+                        ui::warn(
+                            "keys were not rotated: a stolen, unlocked device can still use its copies — run `yo rekey --all`",
+                        );
+                    } else {
+                        ui::ok("rotated every conversation key; the removed device's copies are now useless");
+                    }
                 }
             }
         }

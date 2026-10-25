@@ -203,7 +203,7 @@ async fn full_lifecycle() {
 
     // ── remove alice2; carol's messages no longer reach it ──
     let short = alice2.me.to_string()[..8].to_string();
-    alice.remove_device(&short).await.unwrap();
+    alice.remove_device(&short, false).await.unwrap();
     assert_eq!(alice.devices().await.unwrap().len(), 1);
     carol.send_text("alice", "after removal", None).await.unwrap();
     assert_eq!(unread_bodies(&mut alice).await, vec!["after removal"]);

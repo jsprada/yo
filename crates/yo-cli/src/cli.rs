@@ -93,6 +93,14 @@ pub enum Cmd {
         #[arg(long)]
         yes: bool,
     },
+    /// Rotate a conversation's keys (e.g. after a device was lost).
+    Rekey {
+        /// The contact whose conversation to re-key.
+        name: Option<String>,
+        /// Every conversation, plus your device-sync key.
+        #[arg(long)]
+        all: bool,
+    },
     /// List (or remove) your devices.
     Devices {
         #[command(subcommand)]
@@ -139,6 +147,10 @@ pub enum DevicesCmd {
     Remove {
         /// Device id (or its first characters) from `yo devices`.
         id: String,
+        /// Don't rotate conversation keys afterwards (they are rotated by
+        /// default so the removed device's copies become useless).
+        #[arg(long)]
+        no_rekey: bool,
     },
 }
 

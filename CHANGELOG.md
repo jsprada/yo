@@ -16,7 +16,20 @@ All notable changes to yo! are recorded here. The format follows
 
 ### Security
 
-Phase 3 of the remediation plan in `SECURITY_REVIEW.md`; details and
+Phase 4 (L-3 completion) of the remediation plan in `SECURITY_REVIEW.md`;
+details and verification in `SECURITY_REMEDIATION.md`.
+
+- **L-3 (fixed)** Conversation keys can be rotated: `yo rekey <name>` /
+  `yo rekey --all`, and `yo devices remove` rotates every key by default
+  (`--no-rekey` to skip). The announcement to a contact is signed by the old
+  and the new key; the old inbox is retired but what was queued there still
+  arrives, and a contact who sends before syncing retries automatically.
+  Rotating the device-sync key also rotates the key that authorizes
+  deregistering your devices (the server accepts a replacement authority
+  only when the current one signs for it). A deregistered device's live
+  connections are now dropped at their next request.
+
+### Earlier — Phase 3 of the remediation plan in `SECURITY_REVIEW.md`; details and
 verification in `SECURITY_REMEDIATION.md`.
 
 - **L-3 (mitigated)** `yo devices remove` now also deregisters the device on

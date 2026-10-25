@@ -86,15 +86,37 @@ $ yo devices remove eh67
 ✔ removed device eh67hc3n from all conversations
 ```
 
-Removing takes the device out of the signed device list of every
-conversation, so nobody encrypts new messages to it. It also asks the server
-to **deregister** that device, so its network access is cut off: the server
-forgets its registration, keys and queued messages, and (on a token server)
-it would need a fresh token to reconnect. This works because each device, at
-setup, tells the server which key may later remove it — your account's own
-identity key, which only your devices hold. The server deletes its one-time
-keys and anything queued for it. You can't remove the device you're using; do
-it from another one.
+Removing a device does three things:
+
+1. **Takes it out of every signed device list**, so nobody encrypts new
+   messages to it.
+2. **Deregisters it on the server**, cutting off its network access: the
+   server forgets its registration, keys and queued messages, drops any
+   connection it still has open, and (on a token server) it would need a
+   fresh token to reconnect. This works because each device, at setup, tells
+   the server which key may later remove it — your account's own identity
+   key, which only your devices hold.
+3. **Rotates every conversation key** (`yo rekey --all` under the hood).
+   The removed device still holds a copy of each conversation's identity
+   key; after the rotation those copies are worthless. Your contacts pick the
+   new keys up automatically on their next sync, with no interruption, and
+   your other devices receive the new secrets over device sync.
+
+You can't remove the device you're using; do it from another one.
+`--no-rekey` skips step 3, which is only sensible when you are retiring a
+device you still control and want to save a few seconds.
+
+### Rotating keys by hand
+
+```sh
+yo rekey bob      # one conversation
+yo rekey --all    # every conversation, plus your device-sync key
+```
+
+Rotation is cheap and invisible to the other side (they see "bob rotated
+their keys" in `yo read`'s notices and nothing else changes), so it's fine to
+do after anything that makes you uneasy — a laptop that was briefly out of
+your hands, say.
 
 ### If a device is lost or stolen
 
@@ -103,10 +125,11 @@ strong and unknown to the thief, removing the device is enough: its data
 stays encrypted and `yo devices remove` deregisters it, so it can't even
 collect ciphertext from the server any more.
 
-If you think the thief **knows the passphrase**, removing the device is *not*
-enough on its own. Every device holds the keys for your conversations (that's
-what lets it sign device lists and read messages), and a thief who can unlock
-the device has those keys and your account identity key too — so they could,
-in principle, keep acting until each conversation's keys change. After
-`yo devices remove`, also [burn](burn.md) any conversation that matters and
-re-add those contacts. That creates fresh keys the old device never had.
+If you think the thief **knows the passphrase**, the key rotation that
+`yo devices remove` performs is what protects you: every device holds the
+keys for your conversations (that's what lets it sign device lists and read
+messages), so a thief who can unlock the device has those keys — until they
+are rotated, which the removal does. Do it **as soon as you notice**: until
+then the thief's copy is as good as yours, and whoever rotates first wins.
+If you want belt and braces, [burn](burn.md) the conversations that matter
+most and re-add those contacts as well.

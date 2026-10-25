@@ -39,6 +39,10 @@ pub struct Bundle {
     /// generated; rotated by the client (SECURITY_REVIEW.md, M-3).
     #[serde(default)]
     pub fallback_at: u64,
+    /// The inbox this relationship used before its last re-key. Envelopes
+    /// that were queued for it are still accepted (SECURITY_REVIEW.md L-3).
+    #[serde(default)]
+    pub prev_inbox: Option<InboxId>,
 }
 
 impl Drop for Bundle {
