@@ -48,6 +48,13 @@ First version.
   encrypted envelopes without needing the passphrase.
 - **Prompt indicator**: `yo prompt bash|zsh|fish|powershell [--sync]` prints
   a snippet that reads an unread counter with shell builtins only.
+- **Robustness**: interrupted `yo init` and `yo add` can simply be re-run
+  (setup completes atomically by writing `config.toml` last, and reuses an
+  already-registered device certificate). A connection whose request was
+  cancelled mid-flight is discarded instead of being reused out of sync.
+- **Tests**: unit tests per crate, end-to-end tests against an in-process
+  server (including a plaintext scan of every database), randomized decoder
+  tests, and prompt snippet tests.
 - **Docs**: mdBook site in `docs/` covering server setup, client setup,
   contacts, every feature, a command reference (checked against the CLI by a
   test), the security model and the wire protocol.

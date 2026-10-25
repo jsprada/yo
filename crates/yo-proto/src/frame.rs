@@ -62,6 +62,43 @@ mod tests {
         assert_eq!(r, Request::Fetch);
     }
 
+    /// Poor man's fuzzing: random and mutated frames must decode to an error
+    /// (or a value), never panic or allocate wildly.
+    #[test]
+    fn random_input_never_panics() {
+        use crate::msg::{Envelope, ServerFrame};
+        let mut seed = 0x9e37_79b9_7f4a_7c15u64;
+        let mut next = || {
+            seed ^= seed << 13;
+            seed ^= seed >> 7;
+            seed ^= seed << 17;
+            seed
+        };
+        let valid = postcard::to_stdvec(&ServerFrame::Event(crate::msg::Event::Envelope(Envelope {
+            id: 1,
+            inbox: crate::InboxId([1; 32]),
+            sender: crate::DeviceId([2; 16]),
+            from_member: false,
+            ts: 3,
+            blob: vec![4; 40],
+        })))
+        .unwrap();
+        for i in 0..20_000 {
+            let mut buf: Vec<u8> = if i % 2 == 0 {
+                (0..(next() % 96)).map(|_| next() as u8).collect()
+            } else {
+                let mut v = valid.clone();
+                let pos = (next() as usize) % v.len();
+                v[pos] = next() as u8;
+                v
+            };
+            let _ = postcard::from_bytes::<Request>(&buf);
+            let _ = postcard::from_bytes::<ServerFrame>(&buf);
+            buf.truncate((next() as usize) % (buf.len() + 1));
+            let _ = postcard::from_bytes::<ServerFrame>(&buf);
+        }
+    }
+
     #[tokio::test]
     async fn garbage_is_an_error_not_a_panic() {
         let (a, b) = tokio::io::duplex(4096);

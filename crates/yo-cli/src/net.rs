@@ -30,6 +30,10 @@ pub struct Conn {
     framed: FramedConn<TlsStream<TcpStream>>,
     events: VecDeque<Envelope>,
     pub device: DeviceId,
+    /// Set while a request awaits its response. If a call is cancelled
+    /// mid-flight the response would be read by the *next* call, so such a
+    /// connection must be discarded (see [`Conn::is_poisoned`]).
+    in_flight: bool,
 }
 
 /// Split `host:port`, accepting `[v6]:port` and a missing port.
@@ -73,7 +77,12 @@ impl Conn {
                 anyhow!("TLS handshake with {} failed: {e}", cfg.server)
             }
         })?;
-        let mut conn = Conn { framed: FramedConn::new(stream), events: VecDeque::new(), device: DeviceId([0; 16]) };
+        let mut conn = Conn {
+            framed: FramedConn::new(stream),
+            events: VecDeque::new(),
+            device: DeviceId([0; 16]),
+            in_flight: false,
+        };
         match conn.call(Request::Hello { version: PROTOCOL_VERSION, token }).await? {
             Response::Hello { device, .. } => conn.device = device,
             other => return Err(anyhow!("unexpected hello response: {other:?}")),
@@ -84,16 +93,29 @@ impl Conn {
     /// Send a request and wait for its response. Server-side errors become
     /// [`ServerError`]s. Events that arrive meanwhile are queued.
     pub async fn call(&mut self, req: Request) -> anyhow::Result<Response> {
+        if self.in_flight {
+            return Err(anyhow!("connection out of sync after a cancelled request"));
+        }
+        self.in_flight = true;
         self.framed.send(&req).await?;
         loop {
-            match self.framed.recv::<ServerFrame>().await? {
-                ServerFrame::Response(Response::Error { code, message }) => {
-                    return Err(ServerError { code, message }.into());
-                }
-                ServerFrame::Response(r) => return Ok(r),
+            let frame = self.framed.recv::<ServerFrame>().await?;
+            match frame {
                 ServerFrame::Event(Event::Envelope(e)) => self.events.push_back(e),
+                ServerFrame::Response(r) => {
+                    self.in_flight = false;
+                    return match r {
+                        Response::Error { code, message } => Err(ServerError { code, message }.into()),
+                        r => Ok(r),
+                    };
+                }
             }
         }
+    }
+
+    /// True if a request was cancelled before its response arrived.
+    pub fn is_poisoned(&self) -> bool {
+        self.in_flight
     }
 
     /// Wait for the next pushed envelope (after `Subscribe`).
@@ -107,13 +129,6 @@ impl Conn {
                 ServerFrame::Response(_) => continue,
             }
         }
-    }
-
-    /// Send a request without waiting for its response (the daemon uses this
-    /// for acks and pings while it is waiting for events).
-    pub async fn send_only(&mut self, req: Request) -> anyhow::Result<()> {
-        self.framed.send(&req).await?;
-        Ok(())
     }
 }
 

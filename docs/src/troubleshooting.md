@@ -27,6 +27,16 @@ not behind an HTTP reverse proxy.
 One of you mistyped the code, it expired (10 minutes), or someone else
 tried to use it. Nothing was exchanged. Run `yo add` again for a fresh code.
 
+### I pressed Ctrl-C during `yo add` / `yo init`
+
+Just run the same command again.
+
+- An unfinished `yo add bob` shows in `yo contacts` as
+  "… invite not finished". Running `yo add bob` again replaces it.
+- An unfinished `yo init` is detected (there's no `config.toml` yet), and the
+  next `yo init` starts over. It reuses the device certificate that was
+  already registered, so it doesn't need another registration token.
+
 ### "yo! is locked. Run `yo unlock` first"
 
 The command wasn't run in a terminal (so it couldn't ask for your

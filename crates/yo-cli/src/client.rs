@@ -101,6 +101,10 @@ impl Client {
     /// Open an initialized store with an already-unlocked data key.
     pub fn open(paths: Paths, dk: Key32) -> anyhow::Result<Client> {
         let cfg = ClientConfig::load(&paths)?;
+        Self::open_with(paths, cfg, dk)
+    }
+
+    fn open_with(paths: Paths, cfg: ClientConfig, dk: Key32) -> anyhow::Result<Client> {
         let lock = lock(&paths)?;
         let store = Store::open(&paths, dk)?;
         let spki = device_spki(&paths)?;
@@ -113,40 +117,52 @@ impl Client {
     }
 
     /// Create the device identity, register with the server and open the store.
+    ///
+    /// `config.toml` is written last, by [`Client::finish_setup`], and marks a
+    /// completed setup. Leftovers of an interrupted setup are cleared, but an
+    /// existing device certificate is reused so the device stays registered
+    /// (and doesn't need a second registration token).
     async fn prepare(paths: Paths, opts: &InitOptions) -> anyhow::Result<Client> {
-        if paths.keyfile().exists() {
+        if paths.config().exists() {
             bail!("yo! is already set up in {}", paths.data_dir.display());
         }
         if let Some(p) = &opts.pin {
             tls::parse_pin(p)?;
         }
         paths.create_dirs()?;
-        let (cert, key) = tls::generate_cert(vec!["yo-device".into()])?;
-        yo_store::write_private(&paths.tls_cert(), cert.as_bytes())?;
-        yo_store::write_private(&paths.tls_key(), key.as_bytes())?;
-        let cfg = ClientConfig { server: opts.server.clone(), pin: opts.pin.clone(), unlock_minutes: 15, banner: true };
-
-        let conn = match Conn::connect(&paths, &cfg, opts.token.clone()).await {
-            Ok(c) => c,
-            Err(e) => {
-                let _ = std::fs::remove_file(paths.tls_cert());
-                let _ = std::fs::remove_file(paths.tls_key());
-                return Err(e);
+        for leftover in [paths.keyfile(), paths.db(), paths.unread(), paths.unread_db()] {
+            let _ = std::fs::remove_file(leftover);
+        }
+        if let Ok(rd) = std::fs::read_dir(paths.spool()) {
+            for e in rd.flatten() {
+                let _ = std::fs::remove_file(e.path());
             }
-        };
+        }
+        if device_spki(&paths).is_err() || tls::load_key_file(&paths.tls_key()).is_err() {
+            let (cert, key) = tls::generate_cert(vec!["yo-device".into()])?;
+            yo_store::write_private(&paths.tls_cert(), cert.as_bytes())?;
+            yo_store::write_private(&paths.tls_key(), key.as_bytes())?;
+        }
+        let cfg = ClientConfig { server: opts.server.clone(), pin: opts.pin.clone(), unlock_minutes: 15, banner: true };
+        let conn = Conn::connect(&paths, &cfg, opts.token.clone()).await?;
         let (kf, dk) = KeyFile::create(&opts.passphrase, opts.kdf)?;
         kf.save(&paths.keyfile())?;
-        cfg.save(&paths)?;
-        let mut c = Client::open(paths, dk)?;
+        let mut c = Client::open_with(paths, cfg, dk)?;
         c.conn = Some(conn);
         Ok(c)
+    }
+
+    fn finish_setup(&self) -> anyhow::Result<()> {
+        self.cfg.save(&self.paths)?;
+        self.refresh_unread();
+        Ok(())
     }
 
     /// `yo init`: a brand-new account on this device.
     pub async fn init(paths: Paths, opts: InitOptions) -> anyhow::Result<Client> {
         let mut c = Self::prepare(paths, &opts).await?;
         c.create_relationship(RelKind::Myself, "me".into(), Rik::generate(), None, true, now()).await?;
-        c.refresh_unread();
+        c.finish_setup()?;
         Ok(c)
     }
 
@@ -169,11 +185,14 @@ impl Client {
         for cs in &payload.contacts {
             c.join_contact(cs).await?;
         }
-        c.refresh_unread();
+        c.finish_setup()?;
         Ok(c)
     }
 
     async fn conn(&mut self) -> anyhow::Result<&mut Conn> {
+        if self.conn.as_ref().is_some_and(|c| c.is_poisoned()) {
+            self.conn = None;
+        }
         if self.conn.is_none() {
             self.conn = Some(Conn::connect(&self.paths, &self.cfg, None).await?);
         }
@@ -671,7 +690,7 @@ impl Client {
 
     /// `yo add NAME`: show a code and wait for the other person.
     pub async fn add_open(&mut self, name: &str, on_code: impl FnOnce(&str)) -> anyhow::Result<Relationship> {
-        self.check_new_name(name)?;
+        self.check_new_name(name).await?;
         let (mut rel, rik_pub) = self.pending_contact(name).await?;
         let payload = postcard::to_stdvec(&AddPayload { rik: rik_pub })?;
         let result = self.pake_open(Purpose::AddContact, on_code, payload).await;
@@ -681,7 +700,7 @@ impl Client {
 
     /// `yo add NAME CODE`: use the code the other person gave you.
     pub async fn add_join(&mut self, name: &str, code: &str) -> anyhow::Result<Relationship> {
-        self.check_new_name(name)?;
+        self.check_new_name(name).await?;
         let (nameplate, code) = invite::parse_code(code)?;
         let (mut rel, rik_pub) = self.pending_contact(name).await?;
         let payload = postcard::to_stdvec(&AddPayload { rik: rik_pub })?;
@@ -690,10 +709,15 @@ impl Client {
         Ok(rel)
     }
 
-    fn check_new_name(&self, name: &str) -> anyhow::Result<()> {
+    async fn check_new_name(&mut self, name: &str) -> anyhow::Result<()> {
         validate_name(name)?;
-        if self.contact(name).is_ok() {
-            bail!("you already have a contact named '{name}'");
+        if let Ok(existing) = self.contact(name) {
+            if existing.bundle.peer_rik.is_some() {
+                bail!("you already have a contact named '{name}'");
+            }
+            // Left over from an interrupted `yo add`: discard it.
+            let _ = self.delete_inbox(&existing).await;
+            self.store.shred_relationship(existing.id)?;
         }
         Ok(())
     }

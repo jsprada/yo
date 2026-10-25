@@ -66,7 +66,9 @@ If the exchange fails you'll see:
 ✖ the other side typed a different code — nothing was exchanged. Start again with a new code
 ```
 
-Just run `yo add` again for a fresh code.
+Just run `yo add` again for a fresh code. If you cancel a `yo add` with
+Ctrl-C, the unfinished contact shows as "… invite not finished" in
+`yo contacts`, and the next `yo add` with that name replaces it.
 
 ## Safety words
 

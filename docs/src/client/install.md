@@ -48,6 +48,11 @@ be recovered.
 
 You can also pass the token as `YO_TOKEN=… yo init …`.
 
+If `yo init` is interrupted or fails (a typo in the address, say), run it
+again. Setup only counts as finished once `config.toml` is written, and a
+retry reuses an already-registered device certificate, so it doesn't use up
+another token.
+
 ### Already use yo! on another device?
 
 Don't run a plain `yo init`. Link the new device to your account instead, so

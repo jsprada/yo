@@ -270,7 +270,13 @@ async fn run(cli: Cli, paths: Paths) -> anyhow::Result<()> {
             for r in contacts {
                 let n = unread.get(&r.id).copied().unwrap_or(0);
                 let badge = if n > 0 { ui::accent(&format!("{n} new")) } else { String::new() };
-                let v = if r.bundle.verified { ui::me("✔ verified") } else { ui::red("? unverified") };
+                let v = if r.bundle.peer_rik.is_none() {
+                    ui::dim("… invite not finished (run `yo add` again)")
+                } else if r.bundle.verified {
+                    ui::me("✔ verified")
+                } else {
+                    ui::red("? unverified")
+                };
                 println!(
                     " {:<20} {}  {}  {}",
                     ui::name(&r.bundle.nickname),

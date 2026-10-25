@@ -81,7 +81,7 @@ fn file_contains(path: &Path, needle: &str) -> bool {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn full_lifecycle() {
     let server = start_server(Registration::Open).await;
-    let homes: Vec<tempfile::TempDir> = (0..5).map(|_| tempfile::tempdir().unwrap()).collect();
+    let homes: Vec<tempfile::TempDir> = (0..6).map(|_| tempfile::tempdir().unwrap()).collect();
     let mut alice = new_client(&server, homes[0].path()).await;
     let mut bob = new_client(&server, homes[1].path()).await;
 
@@ -171,6 +171,16 @@ async fn full_lifecycle() {
     assert!(ra.is_err() && rd.is_err());
     assert!(alice.contact("dave").is_err() && dave.contact("alice").is_err(), "nothing half-added");
 
+    // An interrupted `yo add` (opener gives up before anyone joins) doesn't
+    // block adding the same name later.
+    let interrupted = tokio::time::timeout(std::time::Duration::from_millis(300), alice.add_open("erin", |_| {})).await;
+    assert!(interrupted.is_err(), "still waiting when cancelled");
+    let mut erin = new_client(&server, homes[5].path()).await;
+    befriend(&mut alice, "erin", &mut erin, "alice").await;
+    erin.send_text("alice", "hi from erin", None).await.unwrap();
+    assert_eq!(unread_bodies(&mut alice).await, vec!["hi from erin"]);
+    drop(erin);
+
     // ── bob burns alice ──
     bob.burn("alice", false).await.unwrap();
     assert!(bob.contact("alice").is_err());
@@ -225,6 +235,22 @@ async fn registration_token_required() {
     // Single-use: a second device can't reuse it.
     let home2 = tempfile::tempdir().unwrap();
     assert!(Client::init(Paths::at(home2.path()), opts(&server, Some("letmein"))).await.is_err());
+}
+
+#[tokio::test]
+async fn interrupted_setup_can_be_retried() {
+    let server = start_server(Registration::Token).await;
+    let home = tempfile::tempdir().unwrap();
+    let paths = Paths::at(home.path());
+    // Simulate a setup that registered (consuming the token) and was then cut
+    // off before finishing: the device files and keyfile exist, config doesn't.
+    drop(Client::init(paths.clone(), opts(&server, Some("letmein"))).await.unwrap());
+    std::fs::remove_file(paths.config()).unwrap();
+    // Retrying works without a new token, reusing the registered device.
+    let c = Client::init(paths.clone(), opts(&server, None)).await.unwrap();
+    assert!(c.contacts().unwrap().is_empty());
+    drop(c);
+    assert!(Client::init(paths, opts(&server, None)).await.is_err(), "refuses to overwrite a finished setup");
 }
 
 #[tokio::test]
