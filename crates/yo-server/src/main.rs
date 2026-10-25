@@ -1,0 +1,210 @@
+use std::path::{Path, PathBuf};
+
+use anyhow::{Context, bail};
+use clap::{Parser, Subcommand};
+use yo_server::db::Db;
+use yo_server::{Config, Registration, Server};
+
+/// yo! relay server — stores and forwards end-to-end encrypted messages.
+#[derive(Parser)]
+#[command(name = "yo-server", version, about)]
+struct Cli {
+    /// Data directory (server.toml, certificate, database).
+    #[arg(long, short, env = "YO_SERVER_DIR", global = true)]
+    dir: Option<PathBuf>,
+    #[command(subcommand)]
+    cmd: Cmd,
+}
+
+#[derive(Subcommand)]
+enum Cmd {
+    /// Create server.toml and a self-signed certificate.
+    Init {
+        /// Host name or IP address clients will connect to.
+        #[arg(long)]
+        host: String,
+        /// TCP port to listen on.
+        #[arg(long, default_value_t = yo_proto::DEFAULT_PORT)]
+        port: u16,
+        /// Let any device register (default: registration tokens required).
+        #[arg(long)]
+        open: bool,
+        /// Use an existing CA-issued certificate chain (PEM) instead of a
+        /// self-signed one. Clients then need no pin.
+        #[arg(long, requires = "key")]
+        cert: Option<PathBuf>,
+        /// Private key for --cert (PEM).
+        #[arg(long, requires = "cert")]
+        key: Option<PathBuf>,
+        /// Overwrite an existing configuration.
+        #[arg(long)]
+        force: bool,
+    },
+    /// Run the server.
+    Run,
+    /// Print the command clients use to connect (`yo init ...`).
+    Info,
+    /// Show database statistics.
+    Stats,
+    /// Manage registration tokens.
+    Token {
+        #[command(subcommand)]
+        cmd: TokenCmd,
+    },
+}
+
+#[derive(Subcommand)]
+enum TokenCmd {
+    /// Create a token that lets new devices register.
+    Create {
+        /// How many devices may register with this token.
+        #[arg(long, default_value_t = 1)]
+        uses: u32,
+        /// Free-form note to remember who it is for.
+        #[arg(long, default_value = "")]
+        note: String,
+    },
+    /// List unused tokens.
+    List,
+    /// Delete a token.
+    Revoke { token: String },
+}
+
+fn default_dir() -> PathBuf {
+    directories::ProjectDirs::from("", "", "yo-server")
+        .map(|d| d.data_dir().to_path_buf())
+        .unwrap_or_else(|| PathBuf::from("yo-server-data"))
+}
+
+fn open_db(dir: &Path) -> anyhow::Result<Db> {
+    Db::open(&dir.join("yo-server.db")).context("opening database")
+}
+
+fn print_client_command(dir: &Path, cfg: &Config) -> anyhow::Result<()> {
+    let host = &cfg.public_host;
+    let port = cfg.port();
+    let pin = yo_server::pin(dir, cfg)?;
+    println!("Clients connect with:\n");
+    let mut cmd = format!("  yo init --server {host}:{port}");
+    if let Some(p) = pin {
+        cmd.push_str(&format!(" --pin {p}"));
+    }
+    if cfg.registration == Registration::Token {
+        cmd.push_str(" --token <TOKEN>");
+    }
+    println!("{cmd}\n");
+    if cfg.registration == Registration::Token {
+        println!("Create a token per person with:  yo-server token create");
+    }
+    Ok(())
+}
+
+#[tokio::main]
+async fn main() -> anyhow::Result<()> {
+    let cli = Cli::parse();
+    let dir = cli.dir.unwrap_or_else(default_dir);
+
+    match cli.cmd {
+        Cmd::Init { host, port, open, cert, key, force } => {
+            std::fs::create_dir_all(&dir)?;
+            if dir.join("server.toml").exists() && !force {
+                bail!("{} already exists (use --force to overwrite)", dir.join("server.toml").display());
+            }
+            let mut cfg = Config::new(host.clone(), port);
+            if open {
+                cfg.registration = Registration::Open;
+            }
+            match (cert, key) {
+                (Some(c), Some(k)) => {
+                    cfg.cert = std::fs::canonicalize(c)?;
+                    cfg.key = std::fs::canonicalize(k)?;
+                    cfg.pinned = false;
+                }
+                _ => {
+                    let mut names = vec![host.clone()];
+                    if host != "localhost" {
+                        names.push("localhost".into());
+                    }
+                    let (cert_pem, key_pem) = yo_proto::tls::generate_cert(names)?;
+                    std::fs::write(dir.join("server.crt"), cert_pem)?;
+                    write_private(&dir.join("server.key"), key_pem.as_bytes())?;
+                }
+            }
+            cfg.save(&dir)?;
+            open_db(&dir)?;
+            println!("Created {}\n", dir.join("server.toml").display());
+            print_client_command(&dir, &cfg)?;
+            println!("\nStart the server with:  yo-server --dir {} run", dir.display());
+        }
+        Cmd::Run => {
+            tracing_subscriber::fmt()
+                .with_env_filter(
+                    tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| "info".into()),
+                )
+                .init();
+            let cfg = Config::load(&dir)?;
+            let tls = yo_server::tls_config(&dir, &cfg)?;
+            let db = open_db(&dir)?;
+            let listener = tokio::net::TcpListener::bind(&cfg.listen)
+                .await
+                .with_context(|| format!("binding {}", cfg.listen))?;
+            tracing::info!("yo-server listening on {} (registration: {:?})", cfg.listen, cfg.registration);
+            if let Some(p) = yo_server::pin(&dir, &cfg)? {
+                tracing::info!("certificate pin: {p}");
+            }
+            Server::new(db, &cfg).serve(listener, tls).await?;
+        }
+        Cmd::Info => {
+            let cfg = Config::load(&dir)?;
+            print_client_command(&dir, &cfg)?;
+        }
+        Cmd::Stats => {
+            for (k, v) in open_db(&dir)?.stats()? {
+                println!("{k:>26}: {v}");
+            }
+        }
+        Cmd::Token { cmd } => {
+            let db = open_db(&dir)?;
+            match cmd {
+                TokenCmd::Create { uses, note } => {
+                    let token = yo_proto::b32(&random16());
+                    db.create_token(&token, uses, &note, yo_proto::now())?;
+                    println!("{token}");
+                    eprintln!("(valid for {uses} device registration(s))");
+                }
+                TokenCmd::List => {
+                    for (t, uses, _, note) in db.list_tokens()? {
+                        println!("{t}  uses left: {uses}  {note}");
+                    }
+                }
+                TokenCmd::Revoke { token } => {
+                    if !db.revoke_token(&token)? {
+                        bail!("no such token");
+                    }
+                    println!("revoked");
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+fn random16() -> [u8; 16] {
+    let mut b = [0u8; 16];
+    getrandom::fill(&mut b).expect("os rng");
+    b
+}
+
+fn write_private(path: &Path, data: &[u8]) -> std::io::Result<()> {
+    #[cfg(unix)]
+    {
+        use std::io::Write;
+        use std::os::unix::fs::OpenOptionsExt;
+        let mut f = std::fs::OpenOptions::new().write(true).create(true).truncate(true).mode(0o600).open(path)?;
+        f.write_all(data)
+    }
+    #[cfg(not(unix))]
+    {
+        std::fs::write(path, data)
+    }
+}
