@@ -276,7 +276,7 @@ drop handling.
 
 ## 3. Phase 3 (2026-10-26)
 
-Commit: `<pending>` ("Phase 3 remediation"; see git history). Plan items
+Commit: `ed81247` ("Phase 3 remediation: device deregistration, draft/service hardening, pins"). Plan items
 3.1–3.6 of the review. Verification tests are in `crates/yo-cli/tests/limits.rs`
 (Phase 3 section) and crate unit tests, run in CI on every push.
 
