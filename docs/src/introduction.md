@@ -39,7 +39,7 @@ $ yo reply 12 "yes, see you there"
   good on your devices and tells alice's devices to do the same, without
   affecting anything else.
 - **Simple key exchange.** `yo add bob` shows a code like
-  `7-crossbow-marble-tundra`. Read it to bob over the phone or in person; he
+  `48213-crossbow-marble-tundra`. Read it to bob over the phone or in person; he
   types it in. Keys are exchanged with a password-authenticated key exchange
   (SPAKE2), so not even the server can intercept them.
 - **A prompt indicator.** Paste a snippet into your shell config and your

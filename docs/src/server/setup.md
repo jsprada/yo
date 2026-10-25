@@ -104,7 +104,19 @@ pinned = true                  # false when cert is CA-issued
 registration = "token"         # "token" or "open"
 message_ttl_days = 30          # undelivered envelopes are deleted after this
 max_devices = 16               # devices per person per conversation
+
+[limits]                       # abuse limits; all optional, defaults shown
+connections_per_ip = 32                 # concurrent, checked before TLS
+new_connections_per_minute_per_ip = 60  # token bucket, burst = same number
+connections_per_device = 4              # concurrent, per registered device
+queue_mib_per_device = 64               # ciphertext waiting for one device
+send_mib_per_hour_per_device = 256      # ciphertext one device may send per hour
+sends_per_minute = 120                  # Send requests per device
+mailboxes = 2000                        # live invite mailboxes, server-wide
 ```
+
+Old `server.toml` files without a `[limits]` table keep working with the
+defaults.
 
 ## 5. Registration tokens
 
@@ -155,12 +167,69 @@ Logs go to stderr. Set `RUST_LOG=debug` for more detail (e.g.
 `Environment=RUST_LOG=debug` in the unit). Logs contain short device IDs
 and counts, never message content.
 
-## 7. Firewall
+## 7. Firewall and abuse protection
 
 Open the TCP port, e.g. `sudo ufw allow 7443/tcp`. yo! speaks TLS 1.3 with
 the ALPN identifier `yo/1`. It doesn't work behind an HTTP reverse proxy that
 terminates TLS (the client certificate must reach `yo-server`). A TCP or SNI
 pass-through proxy works.
+
+### What the server enforces by itself
+
+Anyone on the internet can start a TLS handshake, but only a registered
+device gets past `Hello`; in `token` mode nobody registers without a token.
+On top of that, `yo-server` enforces the `[limits]` above:
+
+| Stage | Limit (default) | What a client sees |
+|---|---|---|
+| Before TLS | 32 concurrent connections and 60 new connections/min per IP | connection dropped |
+| After `Hello` | 4 concurrent connections per device | `RateLimited` |
+| Sending | 120 sends/min, 256 MiB/hour per device; 64 MiB queued per recipient | `RateLimited` ("slow down", "hourly sending limit", "queue is full") |
+| Invites | 20 opens/joins per minute per device, 2,000 live mailboxes, 16 KiB per message | `RateLimited` |
+| Everything | 2 MiB per frame; `Fetch` pages at 1 MiB | request refused |
+
+Invite mailboxes are bound to the two devices taking part: nobody else can
+read, write or close them, and nameplates have at least five digits.
+
+### Blocking abusers at the network level
+
+The server logs refused registrations with the source address, in a fixed
+format meant for log filters:
+
+```text
+WARN yo_server::server: registration refused device=rnthy3ui ip=203.0.113.9
+```
+
+A fail2ban filter and jail (`/etc/fail2ban/filter.d/yo-server.conf` and
+`/etc/fail2ban/jail.d/yo-server.conf`):
+
+```ini
+[Definition]
+failregex = registration refused device=\S+ ip=<HOST>
+journalmatch = _SYSTEMD_UNIT=yo-server.service
+```
+
+```ini
+[yo-server]
+enabled  = true
+backend  = systemd
+port     = 7443
+maxretry = 5
+findtime = 10m
+bantime  = 1h
+```
+
+For connection floods from a single address, a kernel-level rule is cheaper
+than anything the server can do. With nftables:
+
+```text
+table inet filter {
+  chain input {
+    tcp dport 7443 ct state new limit rate over 30/minute burst 60 packets drop
+    tcp dport 7443 accept
+  }
+}
+```
 
 ## 8. Monitoring
 

@@ -164,7 +164,12 @@ deliberate destruction on top.
   it's weaker than the Unix setup.
 - **Denial of service.** A malicious server can drop, delay, reorder or
   refuse messages, or hide devices from device lists. It can't read or forge
-  them, and replayed messages are rejected by the ratchet.
+  them, and replayed messages are rejected by the ratchet. Against abusive
+  *clients*, the server enforces per-IP, per-device and per-recipient limits
+  (see [Server setup](../server/setup.md#7-firewall-and-abuse-protection)).
+- **Terminal output.** Message text is a contact's input. Control characters,
+  C1 controls and Unicode direction overrides are replaced with `�` before
+  anything is printed, so a message cannot drive your terminal.
 - **Invite codes** sent through another app are exposed to that app until
   used. A code is single-use and expires in 10 minutes.
 - **No history on new devices**, by design.

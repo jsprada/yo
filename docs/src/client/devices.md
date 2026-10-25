@@ -13,9 +13,9 @@ $ yo link
  ── link a new device ───────────────────
  On the new device run:
 
-     yo init --server yo.example.com:7443 --pin sha256:… --link 224-twirl-ozone-rust
+     yo init --server yo.example.com:7443 --pin sha256:… --link 71502-twirl-ozone-rust
 
-     224-twirl-ozone-rust
+     71502-twirl-ozone-rust
 
  Waiting… the code works once and expires in 10 minutes.
 ```
@@ -24,7 +24,7 @@ On the **new** device, run the printed command (add `--token …` if the
 server needs one for new devices):
 
 ```console
-$ yo init --server yo.example.com:7443 --pin sha256:… --link 224-twirl-ozone-rust
+$ yo init --server yo.example.com:7443 --pin sha256:… --link 71502-twirl-ozone-rust
 ✔ yo! is ready on this device (eh67hc3n)
 ✔ linked — 3 contact(s) copied from your other device
 ```

@@ -296,7 +296,10 @@ impl Db {
         })
     }
 
-    pub fn fetch(&self, device: &DeviceId, limit: usize) -> rusqlite::Result<Vec<Envelope>> {
+    /// Up to `limit` queued envelopes, oldest first, stopping once `max_bytes`
+    /// of ciphertext is reached (always at least one), so a response fits in
+    /// a frame no matter how big the backlog is.
+    pub fn fetch(&self, device: &DeviceId, limit: usize, max_bytes: usize) -> rusqlite::Result<Vec<Envelope>> {
         let mut st = self.conn.prepare(
             "SELECT id, inbox, sender, from_member, ts, blob FROM envelopes WHERE device = ?1 ORDER BY id LIMIT ?2",
         )?;
@@ -312,7 +315,26 @@ impl Db {
                 blob: r.get(5)?,
             })
         })?;
-        rows.collect()
+        let mut out = Vec::new();
+        let mut bytes = 0usize;
+        for row in rows {
+            let env = row?;
+            if !out.is_empty() && bytes + env.blob.len() > max_bytes {
+                break;
+            }
+            bytes += env.blob.len();
+            out.push(env);
+        }
+        Ok(out)
+    }
+
+    /// Ciphertext currently queued for a device.
+    pub fn queued_bytes(&self, device: &DeviceId) -> rusqlite::Result<u64> {
+        self.conn.query_row(
+            "SELECT COALESCE(SUM(LENGTH(blob)), 0) FROM envelopes WHERE device = ?1",
+            [&device.0[..]],
+            |r| r.get::<_, i64>(0).map(|n| n as u64),
+        )
     }
 
     pub fn ack(&mut self, device: &DeviceId, ids: &[u64]) -> rusqlite::Result<()> {

@@ -26,8 +26,12 @@ const PREKEY_BATCH: usize = 20;
 const PREKEY_LOW: u32 = 5;
 /// How long an invite code stays usable.
 const INVITE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(600);
-/// Longest message accepted by `yo send`.
-pub const MAX_MESSAGE: usize = 64 * 1024;
+/// Longest message accepted by `yo send`. Chosen so that a padded payload
+/// fits the 64 KiB bucket: a message to 16 devices then stays well under the
+/// 2 MiB frame limit.
+pub const MAX_MESSAGE: usize = 64_000;
+/// Ciphertext per `Send` request; keeps requests far below `MAX_FRAME`.
+const SEND_CHUNK_BYTES: usize = 1024 * 1024;
 
 /// Names that cannot be used for contacts because they are commands.
 pub const RESERVED: &[&str] = &[
@@ -425,9 +429,24 @@ impl Client {
 
         let mut delivered = 0;
         for (inbox, envelopes) in batches {
-            let n = envelopes.len();
-            self.call(Request::Send { inbox, envelopes }).await?;
-            delivered += n;
+            // Split big fan-outs so no request approaches the frame limit.
+            let mut chunk: Vec<OutEnvelope> = Vec::new();
+            let mut bytes = 0;
+            for env in envelopes {
+                if !chunk.is_empty() && bytes + env.blob.len() > SEND_CHUNK_BYTES {
+                    let n = chunk.len();
+                    self.call(Request::Send { inbox, envelopes: std::mem::take(&mut chunk) }).await?;
+                    delivered += n;
+                    bytes = 0;
+                }
+                bytes += env.blob.len();
+                chunk.push(env);
+            }
+            if !chunk.is_empty() {
+                let n = chunk.len();
+                self.call(Request::Send { inbox, envelopes: chunk }).await?;
+                delivered += n;
+            }
         }
         Ok(SendReport { delivered_to: delivered, skipped })
     }
@@ -443,7 +462,7 @@ impl Client {
             bail!("message is empty");
         }
         if text.len() > MAX_MESSAGE {
-            bail!("message is longer than {} KiB", MAX_MESSAGE / 1024);
+            bail!("message is longer than {} KB", MAX_MESSAGE / 1000);
         }
         let mut rel = self.contact(name)?;
         if rel.bundle.peer_rik.is_none() {

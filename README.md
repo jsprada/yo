@@ -32,7 +32,7 @@ $ yo reply 12 "yes, see you there"
   cryptographically.
 - **`yo burn alice`** destroys one conversation on both sides and leaves the
   rest alone.
-- **Easy key exchange:** `yo add bob` shows `7-crossbow-marble-tundra`; read
+- **Easy key exchange:** `yo add bob` shows `48213-crossbow-marble-tundra`; read
   it to bob over the phone. SPAKE2 means not even the server can intercept it.
 - **Prompt indicator:** `yo!(3)` in bash, zsh, fish or PowerShell.
 - **Multiple devices**, on Linux, macOS and Windows.
@@ -70,7 +70,7 @@ mdbook serve docs        # http://localhost:3000
 - [Install & set up a client](docs/src/client/install.md)
 - [Adding contacts](docs/src/client/contacts.md)
 - [Messaging](docs/src/client/messaging.md) · [Prompt indicator](docs/src/client/prompt.md) · [Daemon](docs/src/client/daemon.md) · [Devices](docs/src/client/devices.md) · [Burn](docs/src/client/burn.md)
-- [Command reference](docs/src/reference/commands.md) · [Security model](docs/src/reference/security.md) · [Security review](SECURITY_REVIEW.md) · [Protocol](docs/src/reference/protocol.md)
+- [Command reference](docs/src/reference/commands.md) · [Security model](docs/src/reference/security.md) · [Security review](SECURITY_REVIEW.md) · [Remediation log](SECURITY_REMEDIATION.md) · [Protocol](docs/src/reference/protocol.md)
 
 ## Repository layout
 

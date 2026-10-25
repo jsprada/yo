@@ -12,16 +12,16 @@ $ yo add bob
  ── invite for bob ──────────────────────
  Give bob this code (read it out, or send it somewhere you trust):
 
-     7-crossbow-marble-tundra
+     48213-crossbow-marble-tundra
 
- They run:  yo add <your-name> 7-crossbow-marble-tundra
+ They run:  yo add <your-name> 48213-crossbow-marble-tundra
  Waiting… the code works once and expires in 10 minutes (Ctrl-C to cancel).
 ```
 
 Bob runs:
 
 ```console
-$ yo add alice 7-crossbow-marble-tundra
+$ yo add alice 48213-crossbow-marble-tundra
 ✔ alice added — keys exchanged and verified by the code
   safety words: dowry dandy carve flap angle sling
   Say hi:  yo alice hey!

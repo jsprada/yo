@@ -13,6 +13,44 @@ pub enum Registration {
     Token,
 }
 
+/// Abuse limits. Every value has a default that suits a small server; raise
+/// them for big deployments, lower them if the server is being abused.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct Limits {
+    /// Concurrent connections accepted from one IP address (checked before
+    /// the TLS handshake).
+    pub connections_per_ip: u32,
+    /// New connections per minute from one IP address (token bucket; the
+    /// burst size is the same number).
+    pub new_connections_per_minute_per_ip: u32,
+    /// Concurrent connections per registered device.
+    pub connections_per_device: u32,
+    /// Ciphertext queued for one device, in MiB. Senders get `RateLimited`
+    /// when a recipient's queue is full.
+    pub queue_mib_per_device: u64,
+    /// Ciphertext one device may send per hour, in MiB.
+    pub send_mib_per_hour_per_device: u64,
+    /// `Send` requests per minute per device.
+    pub sends_per_minute: u32,
+    /// Invite mailboxes that may exist at once, server-wide.
+    pub mailboxes: usize,
+}
+
+impl Default for Limits {
+    fn default() -> Self {
+        Limits {
+            connections_per_ip: 32,
+            new_connections_per_minute_per_ip: 60,
+            connections_per_device: 4,
+            queue_mib_per_device: 64,
+            send_mib_per_hour_per_device: 256,
+            sends_per_minute: 120,
+            mailboxes: 2000,
+        }
+    }
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Config {
@@ -36,6 +74,8 @@ pub struct Config {
     /// Max devices per inbox (i.e. per person per relationship).
     #[serde(default = "sixteen")]
     pub max_devices: usize,
+    #[serde(default)]
+    pub limits: Limits,
 }
 
 fn yes() -> bool {
@@ -59,6 +99,7 @@ impl Config {
             registration: Registration::Token,
             message_ttl_days: 30,
             max_devices: 16,
+            limits: Limits::default(),
         }
     }
 
@@ -82,5 +123,20 @@ impl Config {
 
     pub fn port(&self) -> u16 {
         self.listen.rsplit(':').next().and_then(|p| p.parse().ok()).unwrap_or(yo_proto::DEFAULT_PORT)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn old_config_without_limits_still_loads() {
+        let text =
+            "listen = \"0.0.0.0:7443\"\npublic_host = \"h\"\ncert = \"c\"\nkey = \"k\"\nregistration = \"token\"\n";
+        let cfg: Config = toml::from_str(text).unwrap();
+        assert_eq!(cfg.limits, Limits::default());
+        let round: Config = toml::from_str(&toml::to_string_pretty(&cfg).unwrap()).unwrap();
+        assert_eq!(round.limits, Limits::default());
     }
 }

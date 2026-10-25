@@ -6,6 +6,33 @@ All notable changes to yo! are recorded here. The format follows
 
 ## [Unreleased]
 
+### Security
+
+Phase 1 of the remediation plan in `SECURITY_REVIEW.md`; details and
+verification in `SECURITY_REMEDIATION.md`.
+
+- **H-1** Server abuse limits, configurable in a new `[limits]` table of
+  `server.toml`: concurrent and new-connection limits per IP (enforced
+  before the TLS handshake), concurrent connections per device, an hourly
+  sending budget per device, a queue quota per recipient device, and a cap
+  on live invite mailboxes (with 16 KiB mailbox messages).
+- **M-1** Invite mailboxes are bound to the device that opened and the device
+  that joined them; anyone else gets `Unauthorized`. Nameplates now have at
+  least five digits, so codes look like `48213-crossbow-marble-tundra`.
+- **M-2** Message text is sanitized before it reaches the terminal: control
+  characters, C1 controls and bidirectional overrides become `�`.
+- **M-6 (new)** `Fetch` responses are paged at 1 MiB and sends are chunked,
+  so a backlog of large messages can no longer exceed the 2 MiB frame limit
+  and stall delivery to a device.
+- The server logs refused registrations as
+  `registration refused device=… ip=…` for fail2ban, and disables ANSI
+  colors when stderr is not a terminal.
+
+### Changed
+
+- Maximum message length is 64,000 bytes (was 65,536) so every normal message
+  fits the 64 KiB padding bucket.
+
 ### Added
 
 - `SECURITY_REVIEW.md`: a security review of 0.1.0 (threat model, findings

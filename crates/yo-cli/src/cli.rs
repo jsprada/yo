@@ -12,7 +12,7 @@ Send a message:
 First steps:
   yo init --server HOST:PORT --pin sha256:...   set up this device
   yo add bob                                    show a code for bob
-  yo add alice 7-crossbow-marble-tundra         use the code alice gave you
+  yo add alice 48213-crossbow-marble-tundra         use the code alice gave you
   yo prompt bash                                prompt indicator snippet
 
 Docs: https://github.com/jsprada/yo (docs/ folder)";
@@ -46,7 +46,7 @@ pub enum Cmd {
     Add {
         /// Your name for this contact (only you see it).
         name: String,
-        /// The invite code they gave you, e.g. 7-crossbow-marble-tundra.
+        /// The invite code they gave you, e.g. 48213-crossbow-marble-tundra.
         code: Vec<String>,
         /// Also show the code as a QR code.
         #[arg(long)]

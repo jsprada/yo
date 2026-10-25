@@ -42,8 +42,8 @@ Each asks for a passphrase that encrypts everything stored on that device.
 ```sh
 # alice                                        # bob
 yo add bob
-#   → shows 7-crossbow-marble-tundra
-#     and waits                                yo add alice 7-crossbow-marble-tundra
+#   → shows 48213-crossbow-marble-tundra
+#     and waits                                yo add alice 48213-crossbow-marble-tundra
 ✔ bob added                                    ✔ alice added
 ```
 

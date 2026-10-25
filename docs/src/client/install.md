@@ -63,7 +63,7 @@ it gets your contacts. See [Multiple devices](devices.md):
 # on the old device
 yo link
 # on the new device (the command is printed by `yo link`)
-yo init --server … --pin … --link 224-twirl-ozone-rust
+yo init --server … --pin … --link 71502-twirl-ozone-rust
 ```
 
 ## 4. Recommended extras

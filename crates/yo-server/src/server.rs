@@ -1,6 +1,12 @@
 //! Connection handling and request dispatch.
+//!
+//! Abuse limits (see `Limits` in `config.rs` and SECURITY_REVIEW.md, H-1):
+//! connections are admitted per IP before the TLS handshake and per device
+//! after `Hello`; sending is bounded per sender per hour and per recipient
+//! queue; invite mailboxes are capped and bound to their participants.
 
 use std::collections::HashMap;
+use std::net::IpAddr;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
@@ -16,7 +22,7 @@ use yo_proto::msg::{
 };
 use yo_proto::{DeviceId, InboxId, PROTOCOL_VERSION, now, tls};
 
-use crate::config::{Config, Registration};
+use crate::config::{Config, Limits, Registration};
 use crate::db::{Db, InboxState};
 use crate::mailbox::{MailboxError, Mailboxes};
 
@@ -25,20 +31,64 @@ const IDLE_TIMEOUT: Duration = Duration::from_secs(300);
 const LONG_POLL: Duration = Duration::from_secs(25);
 const MAX_PREKEYS: usize = 100;
 const MAX_ENVELOPES_PER_SEND: usize = 64;
-const MAX_BLOB: usize = 300 * 1024;
+/// Largest padded payload (256 KiB) plus Olm and encoding overhead.
+pub const MAX_BLOB: usize = 272 * 1024;
 const FETCH_LIMIT: usize = 200;
+/// A `Fetch` response must fit inside `yo_proto::MAX_FRAME` with room to spare.
+pub const FETCH_MAX_BYTES: usize = 1024 * 1024;
+const MIB: u64 = 1024 * 1024;
 
 type Subscribers = HashMap<DeviceId, Vec<mpsc::UnboundedSender<Envelope>>>;
-type RateLimits = HashMap<(DeviceId, &'static str), (Instant, u32)>;
+type Windows = HashMap<(DeviceId, &'static str), (Instant, u32)>;
+
+struct IpState {
+    active: u32,
+    tokens: f64,
+    refilled: Instant,
+}
 
 pub struct Server {
     db: Mutex<Db>,
     mailboxes: Mutex<Mailboxes>,
     subs: Mutex<Subscribers>,
-    limits: Mutex<RateLimits>,
+    /// Fixed-window per-device request counters.
+    windows: Mutex<Windows>,
+    ips: Mutex<HashMap<IpAddr, IpState>>,
+    device_conns: Mutex<HashMap<DeviceId, u32>>,
+    /// Bytes sent per device in the current hour.
+    send_bytes: Mutex<HashMap<DeviceId, (Instant, u64)>>,
+    limits: Limits,
     registration: Registration,
     ttl_days: u64,
     max_devices: usize,
+}
+
+/// Holds one slot of an IP's connection budget; released on drop.
+struct IpGuard {
+    server: Arc<Server>,
+    ip: IpAddr,
+}
+
+impl Drop for IpGuard {
+    fn drop(&mut self) {
+        if let Some(s) = self.server.ips.lock().expect("ip lock").get_mut(&self.ip) {
+            s.active = s.active.saturating_sub(1);
+        }
+    }
+}
+
+/// Holds one slot of a device's connection budget; released on drop.
+struct DeviceGuard {
+    server: Arc<Server>,
+    device: DeviceId,
+}
+
+impl Drop for DeviceGuard {
+    fn drop(&mut self) {
+        if let Some(n) = self.server.device_conns.lock().expect("device lock").get_mut(&self.device) {
+            *n = n.saturating_sub(1);
+        }
+    }
 }
 
 fn err(code: ErrorCode, message: impl Into<String>) -> Response {
@@ -50,13 +100,24 @@ fn internal(e: impl std::fmt::Display) -> Response {
     err(ErrorCode::Internal, "internal server error")
 }
 
+fn canonical(ip: IpAddr) -> IpAddr {
+    match ip {
+        IpAddr::V6(v6) => v6.to_canonical(),
+        v4 => v4,
+    }
+}
+
 impl Server {
     pub fn new(db: Db, cfg: &Config) -> Arc<Server> {
         Arc::new(Server {
             db: Mutex::new(db),
-            mailboxes: Mutex::new(Mailboxes::default()),
+            mailboxes: Mutex::new(Mailboxes::new(cfg.limits.mailboxes)),
             subs: Mutex::new(HashMap::new()),
-            limits: Mutex::new(HashMap::new()),
+            windows: Mutex::new(HashMap::new()),
+            ips: Mutex::new(HashMap::new()),
+            device_conns: Mutex::new(HashMap::new()),
+            send_bytes: Mutex::new(HashMap::new()),
+            limits: cfg.limits.clone(),
             registration: cfg.registration,
             ttl_days: cfg.message_ttl_days,
             max_devices: cfg.max_devices,
@@ -75,10 +136,17 @@ impl Server {
         });
         loop {
             let (tcp, addr) = listener.accept().await?;
+            let ip = canonical(addr.ip());
+            // Admission per IP happens before any TLS work is done.
+            let Some(ip_guard) = self.admit_ip(ip) else {
+                debug!("refused connection from {ip}: per-IP limit");
+                continue;
+            };
             let me = self.clone();
             let acceptor = acceptor.clone();
             tokio::spawn(async move {
-                if let Err(e) = me.connection(tcp, acceptor).await {
+                let _ip_guard = ip_guard;
+                if let Err(e) = me.connection(tcp, acceptor, ip).await {
                     debug!("{addr}: {e}");
                 }
             });
@@ -98,7 +166,11 @@ impl Server {
             info!("expired {r} old records");
         }
         self.mailboxes.lock().expect("mailbox lock").expire();
-        self.limits.lock().expect("limits lock").retain(|_, (t, _)| t.elapsed() < Duration::from_secs(60));
+        self.windows.lock().expect("windows lock").retain(|_, (t, _)| t.elapsed() < Duration::from_secs(60));
+        let full = self.limits.new_connections_per_minute_per_ip as f64;
+        self.ips.lock().expect("ip lock").retain(|_, s| s.active > 0 || s.tokens < full);
+        self.device_conns.lock().expect("device lock").retain(|_, n| *n > 0);
+        self.send_bytes.lock().expect("send lock").retain(|_, (t, _)| t.elapsed() < Duration::from_secs(3600));
         self.subs.lock().expect("subs lock").retain(|_, v| {
             v.retain(|tx| !tx.is_closed());
             !v.is_empty()
@@ -107,7 +179,7 @@ impl Server {
 
     /// Simple fixed-window rate limit per device and action.
     fn allow(&self, device: &DeviceId, action: &'static str, per_minute: u32) -> bool {
-        let mut l = self.limits.lock().expect("limits lock");
+        let mut l = self.windows.lock().expect("windows lock");
         let e = l.entry((*device, action)).or_insert((Instant::now(), 0));
         if e.0.elapsed() > Duration::from_secs(60) {
             *e = (Instant::now(), 0);
@@ -116,7 +188,47 @@ impl Server {
         e.1 <= per_minute
     }
 
-    async fn connection(self: Arc<Self>, tcp: TcpStream, acceptor: TlsAcceptor) -> anyhow::Result<()> {
+    /// Token bucket (new connections per minute) plus a concurrency cap, per IP.
+    fn admit_ip(self: &Arc<Self>, ip: IpAddr) -> Option<IpGuard> {
+        let per_min = self.limits.new_connections_per_minute_per_ip.max(1) as f64;
+        let mut ips = self.ips.lock().expect("ip lock");
+        let st = ips.entry(ip).or_insert(IpState { active: 0, tokens: per_min, refilled: Instant::now() });
+        let elapsed = st.refilled.elapsed().as_secs_f64();
+        st.tokens = (st.tokens + elapsed * per_min / 60.0).min(per_min);
+        st.refilled = Instant::now();
+        if st.active >= self.limits.connections_per_ip || st.tokens < 1.0 {
+            return None;
+        }
+        st.tokens -= 1.0;
+        st.active += 1;
+        Some(IpGuard { server: self.clone(), ip })
+    }
+
+    fn admit_device(self: &Arc<Self>, device: DeviceId) -> Option<DeviceGuard> {
+        let mut d = self.device_conns.lock().expect("device lock");
+        let n = d.entry(device).or_insert(0);
+        if *n >= self.limits.connections_per_device {
+            return None;
+        }
+        *n += 1;
+        Some(DeviceGuard { server: self.clone(), device })
+    }
+
+    /// Charge `bytes` against the device's hourly sending budget.
+    fn charge_send(&self, device: &DeviceId, bytes: u64) -> bool {
+        let mut s = self.send_bytes.lock().expect("send lock");
+        let e = s.entry(*device).or_insert((Instant::now(), 0));
+        if e.0.elapsed() > Duration::from_secs(3600) {
+            *e = (Instant::now(), 0);
+        }
+        if e.1 + bytes > self.limits.send_mib_per_hour_per_device * MIB {
+            return false;
+        }
+        e.1 += bytes;
+        true
+    }
+
+    async fn connection(self: Arc<Self>, tcp: TcpStream, acceptor: TlsAcceptor, ip: IpAddr) -> anyhow::Result<()> {
         tcp.set_nodelay(true)?;
         let stream = timeout(HANDSHAKE_TIMEOUT, acceptor.accept(tcp)).await??;
         let cert = stream
@@ -131,10 +243,17 @@ impl Server {
 
         // Every connection starts with Hello (and registration if needed).
         let hello: Request = timeout(HANDSHAKE_TIMEOUT, conn.recv()).await??;
-        let resp = match hello {
-            Request::Hello { version, token } => self.hello(&device, version, token),
+        let mut resp = match hello {
+            Request::Hello { version, token } => self.hello(&device, ip, version, token),
             _ => err(ErrorCode::BadRequest, "expected Hello"),
         };
+        let mut _device_guard = None;
+        if matches!(resp, Response::Hello { .. }) {
+            match self.admit_device(device) {
+                Some(g) => _device_guard = Some(g),
+                None => resp = err(ErrorCode::RateLimited, "too many open connections from this device"),
+            }
+        }
         let ok = matches!(resp, Response::Hello { .. });
         conn.send(&ServerFrame::Response(resp)).await?;
         if !ok {
@@ -166,7 +285,7 @@ impl Server {
         Ok(())
     }
 
-    fn hello(&self, device: &DeviceId, version: u16, token: Option<String>) -> Response {
+    fn hello(&self, device: &DeviceId, ip: IpAddr, version: u16, token: Option<String>) -> Response {
         if version != PROTOCOL_VERSION {
             return err(
                 ErrorCode::VersionMismatch,
@@ -185,6 +304,8 @@ impl Server {
                     },
                 };
                 if !allowed {
+                    // Stable wording: fail2ban filters match on it (docs/src/server/setup.md).
+                    warn!("registration refused device={} ip={ip}", device.short());
                     return err(
                         ErrorCode::RegistrationRequired,
                         "this server needs a registration token (ask the operator for `yo-server token create`)",
@@ -193,7 +314,7 @@ impl Server {
                 if let Err(e) = db.register(device, now()) {
                     return internal(e);
                 }
-                info!("registered new device {}", device.short());
+                info!("registered new device {} from {ip}", device.short());
             }
             Err(e) => return internal(e),
         }
@@ -226,7 +347,7 @@ impl Server {
                 }
             }
             Request::Send { inbox, envelopes } => self.send(me, inbox, envelopes),
-            Request::Fetch => match self.db.lock().expect("db lock").fetch(me, FETCH_LIMIT) {
+            Request::Fetch => match self.db.lock().expect("db lock").fetch(me, FETCH_LIMIT, FETCH_MAX_BYTES) {
                 Ok(v) => Response::Envelopes(v),
                 Err(e) => internal(e),
             },
@@ -239,33 +360,47 @@ impl Server {
                 if !self.allow(me, "mailbox", 20) {
                     return err(ErrorCode::RateLimited, "too many invites, wait a minute");
                 }
-                Response::Nameplate(self.mailboxes.lock().expect("mailbox lock").open())
+                match self.mailboxes.lock().expect("mailbox lock").open(*me) {
+                    Ok(n) => Response::Nameplate(n),
+                    Err(_) => err(ErrorCode::RateLimited, "the server is busy with invites; try again in a minute"),
+                }
             }
             Request::MailboxJoin { nameplate } => {
                 if !self.allow(me, "mailbox", 20) {
                     return err(ErrorCode::RateLimited, "too many invites, wait a minute");
                 }
-                match self.mailboxes.lock().expect("mailbox lock").join(nameplate) {
+                match self.mailboxes.lock().expect("mailbox lock").join(nameplate, *me) {
                     Ok(()) => Response::Ok,
                     Err(MailboxError::AlreadyJoined) => {
                         err(ErrorCode::Conflict, "that code was already used; ask for a new one")
                     }
+                    Err(MailboxError::Unauthorized) => err(ErrorCode::BadRequest, "you can't join your own invite"),
                     Err(_) => err(ErrorCode::NotFound, "no such invite (expired or already used)"),
                 }
             }
             Request::MailboxPut { nameplate, side, msg } => {
-                match self.mailboxes.lock().expect("mailbox lock").put(nameplate, side, msg) {
+                if !self.allow(me, "mailbox-io", 240) {
+                    return err(ErrorCode::RateLimited, "slow down");
+                }
+                match self.mailboxes.lock().expect("mailbox lock").put(nameplate, *me, side, msg) {
                     Ok(()) => Response::Ok,
                     Err(MailboxError::TooLarge) => err(ErrorCode::BadRequest, "mailbox message too large"),
+                    Err(MailboxError::Unauthorized) => err(ErrorCode::Unauthorized, "not a participant of this invite"),
                     Err(_) => err(ErrorCode::NotFound, "invite closed"),
                 }
             }
             Request::MailboxGet { nameplate, side, index } => {
+                if !self.allow(me, "mailbox-io", 240) {
+                    return err(ErrorCode::RateLimited, "slow down");
+                }
                 let deadline = tokio::time::Instant::now() + LONG_POLL;
                 loop {
-                    let got = self.mailboxes.lock().expect("mailbox lock").get(nameplate, side, index);
+                    let got = self.mailboxes.lock().expect("mailbox lock").get(nameplate, *me, side, index);
                     let (msg, notify) = match got {
                         Ok(v) => v,
+                        Err(MailboxError::Unauthorized) => {
+                            return err(ErrorCode::Unauthorized, "not a participant of this invite");
+                        }
                         Err(_) => return err(ErrorCode::NotFound, "invite closed"),
                     };
                     if msg.is_some() {
@@ -273,7 +408,9 @@ impl Server {
                     }
                     let notified = notify.notified();
                     // Re-check after registering interest to avoid a lost wakeup.
-                    if let Ok((Some(m), _)) = self.mailboxes.lock().expect("mailbox lock").get(nameplate, side, index) {
+                    if let Ok((Some(m), _)) =
+                        self.mailboxes.lock().expect("mailbox lock").get(nameplate, *me, side, index)
+                    {
                         return Response::MailboxMsg(Some(m));
                     }
                     if tokio::time::timeout_at(deadline, notified).await.is_err() {
@@ -282,8 +419,10 @@ impl Server {
                 }
             }
             Request::MailboxClose { nameplate } => {
-                self.mailboxes.lock().expect("mailbox lock").close(nameplate);
-                Response::Ok
+                match self.mailboxes.lock().expect("mailbox lock").close(nameplate, *me) {
+                    Ok(()) | Err(MailboxError::NotFound) => Response::Ok,
+                    Err(_) => err(ErrorCode::Unauthorized, "not a participant of this invite"),
+                }
             }
         }
     }
@@ -347,8 +486,12 @@ impl Server {
         if envelopes.len() > MAX_ENVELOPES_PER_SEND || envelopes.iter().any(|e| e.blob.len() > MAX_BLOB) {
             return err(ErrorCode::BadRequest, "message too large");
         }
-        if !self.allow(me, "send", 600) {
+        if !self.allow(me, "send", self.limits.sends_per_minute) {
             return err(ErrorCode::RateLimited, "slow down");
+        }
+        let total: u64 = envelopes.iter().map(|e| e.blob.len() as u64).sum();
+        if !self.charge_send(me, total) {
+            return err(ErrorCode::RateLimited, "hourly sending limit reached; try again later");
         }
         let db = self.db.lock().expect("db lock");
         let list = match db.inbox(&inbox) {
@@ -359,6 +502,22 @@ impl Server {
         };
         if envelopes.iter().any(|e| !list.list.devices.iter().any(|d| d.device == e.device)) {
             return err(ErrorCode::Conflict, "device list changed; refetch and retry");
+        }
+        // Per-recipient queue quota, checked for the whole batch before any
+        // envelope is stored so a send is all-or-nothing.
+        let quota = self.limits.queue_mib_per_device * MIB;
+        let mut incoming: HashMap<DeviceId, u64> = HashMap::new();
+        for e in &envelopes {
+            *incoming.entry(e.device).or_default() += e.blob.len() as u64;
+        }
+        for (device, add) in &incoming {
+            match db.queued_bytes(device) {
+                Ok(q) if q + add > quota => {
+                    return err(ErrorCode::RateLimited, "a recipient's message queue is full; try again later");
+                }
+                Ok(_) => {}
+                Err(e) => return internal(e),
+            }
         }
         let from_member = list.list.devices.iter().any(|d| d.device == *me);
         let ts = now();

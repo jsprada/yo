@@ -28,7 +28,7 @@ your sent messages show up everywhere). `N unreachable` means a device had no
 encryption keys available; it receives later messages once it comes back
 online.
 
-Messages can be up to 64 KiB.
+Messages can be up to 64,000 bytes (about 64 KB, or roughly 10,000 words).
 
 ## Read
 

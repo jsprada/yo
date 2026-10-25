@@ -65,6 +65,21 @@ pub fn when(ts: u64) -> String {
     }
 }
 
+/// Make text from a contact safe to print: control characters (other than
+/// newline and tab), C1 controls and Unicode bidirectional overrides are
+/// replaced with U+FFFD so a message can't drive the terminal
+/// (SECURITY_REVIEW.md, M-2).
+pub fn clean(s: &str) -> String {
+    s.chars()
+        .map(|c| match c {
+            '\n' | '\t' => c,
+            c if c.is_control() => '\u{FFFD}',
+            '\u{202A}'..='\u{202E}' | '\u{2066}'..='\u{2069}' => '\u{FFFD}',
+            c => c,
+        })
+        .collect()
+}
+
 fn first_line(s: &str, max: usize) -> String {
     let line = s.lines().next().unwrap_or("");
     if line.chars().count() > max || s.lines().count() > 1 {
@@ -81,7 +96,7 @@ pub fn card(row: &MessageRow, contact: &str, quote: Option<&MessageRow>, reply_h
     let num = accent(&format!("#{}", row.id));
     if row.msg.kind == MessageKind::Notice {
         out.push_str(&format!(" ┌ {num} {} · {}\n", accent("yo!"), dim(&when(row.msg.received_at))));
-        for l in row.msg.body.lines() {
+        for l in clean(&row.msg.body).lines() {
             out.push_str(&format!(" │ {}\n", red(l)));
         }
         out.push_str(" └\n");
@@ -93,9 +108,9 @@ pub fn card(row: &MessageRow, contact: &str, quote: Option<&MessageRow>, reply_h
     };
     out.push_str(&format!(" ┌ {num} {who} · {}\n", dim(&when(row.msg.sent_at))));
     if let Some(q) = quote {
-        out.push_str(&format!(" │ {}\n", dim(&format!("↪ re #{}: {}", q.id, first_line(&q.msg.body, 50)))));
+        out.push_str(&format!(" │ {}\n", dim(&format!("↪ re #{}: {}", q.id, first_line(&clean(&q.msg.body), 50)))));
     }
-    for l in row.msg.body.lines() {
+    for l in clean(&row.msg.body).lines() {
         out.push_str(&format!(" │ {l}\n"));
     }
     if reply_hint && row.msg.direction == Direction::In {
@@ -117,7 +132,7 @@ pub fn history_line(row: &MessageRow, contact: &str, quote: Option<&MessageRow>)
         head.push_str(&format!(" {}", dim(&format!("↪ #{}", q.id))));
     }
     let mut out = format!(" {head}\n");
-    for l in row.msg.body.lines() {
+    for l in clean(&row.msg.body).lines() {
         out.push_str(&format!("       {l}\n"));
     }
     out
@@ -126,4 +141,20 @@ pub fn history_line(row: &MessageRow, contact: &str, quote: Option<&MessageRow>)
 pub fn rule(title: &str) -> String {
     let width = 40usize.saturating_sub(title.chars().count() + 4);
     format!(" {} {} {}", dim("──"), bold(title), dim(&"─".repeat(width)))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::clean;
+
+    #[test]
+    fn control_and_bidi_characters_are_neutralized() {
+        let hostile = "ok\x1b[2Jcleared\u{202e}reversed\x07\u{9b}end\nline2\ttab";
+        let safe = clean(hostile);
+        assert!(!safe.contains('\x1b') && !safe.contains('\u{202e}') && !safe.contains('\x07'));
+        assert!(!safe.contains('\u{9b}'));
+        assert!(safe.contains("ok\u{FFFD}[2Jcleared"));
+        assert!(safe.contains("\nline2\ttab"), "newline and tab survive");
+        assert_eq!(clean("plain ünïcödé ✔"), "plain ünïcödé ✔");
+    }
 }
