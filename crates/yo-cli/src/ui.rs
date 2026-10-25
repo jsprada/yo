@@ -80,6 +80,12 @@ pub fn clean(s: &str) -> String {
         .collect()
 }
 
+/// True when a message's claimed send time and its receive time differ by
+/// more than a few minutes in either direction.
+fn clock_skew(m: &yo_store::StoredMessage) -> bool {
+    m.sent_at.abs_diff(m.received_at) > 300
+}
+
 fn first_line(s: &str, max: usize) -> String {
     let line = s.lines().next().unwrap_or("");
     if line.chars().count() > max || s.lines().count() > 1 {
@@ -112,6 +118,11 @@ pub fn card(row: &MessageRow, contact: &str, quote: Option<&MessageRow>, reply_h
     }
     for l in clean(&row.msg.body).lines() {
         out.push_str(&format!(" │ {l}\n"));
+    }
+    // The header time is the sender's claim; if it disagrees with when we
+    // actually received it, show the received time too (SECURITY_REVIEW.md L-5).
+    if row.msg.direction == Direction::In && clock_skew(&row.msg) {
+        out.push_str(&format!(" │ {}\n", dim(&format!("(received {})", when(row.msg.received_at)))));
     }
     if reply_hint && row.msg.direction == Direction::In {
         out.push_str(&format!(" └ {}\n", dim(&format!("↩ yo reply {} …", row.id))));
@@ -146,6 +157,34 @@ pub fn rule(title: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::clean;
+
+    use yo_store::{Direction, MessageKind, MessageRow, StoredMessage};
+
+    fn row(sent: u64, received: u64) -> MessageRow {
+        MessageRow {
+            id: 1,
+            rel_id: 1,
+            read: false,
+            msg: StoredMessage {
+                uuid: [0; 16],
+                direction: Direction::In,
+                kind: MessageKind::Text,
+                sent_at: sent,
+                received_at: received,
+                body: "hi".into(),
+                reply_to: None,
+            },
+        }
+    }
+
+    #[test]
+    fn receive_time_shown_only_when_it_diverges() {
+        let now = yo_proto::now();
+        // Clocks agree: no "(received …)" note.
+        assert!(!super::card(&row(now, now), "bob", None, false).contains("received"));
+        // Sender's time is hours off: the real receive time is shown.
+        assert!(super::card(&row(now - 7200, now), "bob", None, false).contains("received"));
+    }
 
     #[test]
     fn control_and_bidi_characters_are_neutralized() {

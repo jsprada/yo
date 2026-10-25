@@ -82,6 +82,22 @@ invite command itself. `yo-server info` prints it again at any time.
 > server: every client would refuse the new certificate (that's the point of
 > pinning). Back them up.
 
+**Rotating a pinned certificate.** If you do need to change a self-signed
+certificate (key compromise, or a planned rotation), clients can trust two
+pins at once so nobody is locked out mid-change:
+
+1. Generate the new certificate and note its pin (`yo-server info` after
+   swapping, or compute it separately).
+2. Each person adds the new pin to `config.toml` under `extra_pins` while
+   keeping the old `pin`:
+   ```toml
+   pin = "sha256:<old>"
+   extra_pins = ["sha256:<new>"]
+   ```
+3. Once everyone has the new pin, switch the server to the new certificate.
+   Clients keep connecting because the new pin is accepted.
+4. Afterwards, make the new pin the primary `pin` and drop the old one.
+
 **CA certificate.** If you already have certificates (e.g. from certbot):
 
 ```sh
@@ -247,6 +263,27 @@ yo-server --dir /var/lib/yo-server stats
           queued envelopes: 3
              one-time keys: 180
 ```
+
+`stats` reports the database (it's a separate process from the running
+server). The running server also logs a counter line once a minute, which is
+what to scrape or alert on for abuse:
+
+```text
+INFO yo_server::server: metrics accepted=1920 refused_ip=4 refused_device_conn=0 refused_registration=7 rate_limited=1 live_mailboxes=2
+```
+
+| Field | Meaning |
+|---|---|
+| `accepted` | connections admitted past the per-IP gate |
+| `refused_ip` | connections dropped by the per-IP limit (before TLS) |
+| `refused_device_conn` | connections refused by the per-device limit |
+| `refused_registration` | failed registrations (bad or missing token) |
+| `rate_limited` | requests refused by a rate limit |
+| `live_mailboxes` | invite mailboxes currently open |
+
+Steadily climbing `refused_*` or `rate_limited` is the signal to tighten
+`[limits]` or add a network-level block (above). The counts are cumulative
+since the server started and contain no per-user information.
 
 ## 9. Backups and upgrades
 

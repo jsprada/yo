@@ -8,7 +8,32 @@ All notable changes to yo! are recorded here. The format follows
 
 ### Security
 
-Phase 2 of the remediation plan in `SECURITY_REVIEW.md`; details and
+Phase 3 of the remediation plan in `SECURITY_REVIEW.md`; details and
+verification in `SECURITY_REMEDIATION.md`.
+
+- **L-3 (mitigated)** `yo devices remove` now also deregisters the device on
+  the server, cutting off its access. Each device binds, at setup, the key
+  allowed to deregister it (your account identity key), so only your own
+  devices can do it and a stolen *locked* device is fully cut off. A stolen
+  *unlocked* device still requires burning the conversations (re-keying is
+  future work).
+- **L-4** Message drafts are written under `$XDG_RUNTIME_DIR` (RAM) when
+  available, and vim-family editors are launched with swap/undo/backup off.
+- **L-5** When a message's claimed send time disagrees with when it was
+  received, `yo read` shows the received time too.
+- **L-7** Values embedded in generated service files (the executable path,
+  `YO_HOME`) are escaped per format, and control characters are refused.
+- **I-1** Clients accept more than one certificate pin (`extra_pins`) so a
+  self-signed certificate can be rotated without lock-outs; GitHub Actions in
+  CI are pinned to commit SHAs. The replayable-`DeleteInbox` and same-user
+  agent items are accepted with rationale (see `SECURITY_REMEDIATION.md`).
+
+### Added (operations)
+
+- `yo-server` logs a one-line abuse-counter summary once a minute
+  (`metrics accepted=… refused_ip=… …`) for scraping and alerting (3.6).
+
+### Earlier — Phase 2 of the remediation plan in `SECURITY_REVIEW.md`; details and
 verification in `SECURITY_REMEDIATION.md`.
 
 - **M-3** The Olm fallback key is rotated (after a week, or sooner when

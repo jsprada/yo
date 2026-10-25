@@ -22,12 +22,12 @@ Status is one of *Open*, *Fixed*, *Mitigated* (risk reduced, residual noted),
 | M-6 | *(new)* Large backlogs exceeded the frame limit and stalled delivery | Medium | **Fixed** | 2026-10-25 | [§1.4](#14-m-6-new-fetch-responses-could-exceed-the-frame-limit) |
 | L-1 | Device lists may name devices that never joined | Low | **Fixed** | 2026-10-26 | [§2.4](#24-l-1-device-lists-must-name-registered-devices) |
 | L-2 | Serialized database access | Low | **Fixed** | 2026-10-26 | [§2.5](#25-l-2-database-off-the-async-runtime) |
-| L-3 | Removed devices keep conversation keys | Low | Open (Phase 3) | | |
-| L-4 | Draft written to disk in the clear | Low | Open (Phase 3) | | |
-| L-5 | Sender-controlled timestamps | Low | Open (Phase 3) | | |
+| L-3 | Removed devices keep conversation keys | Low | **Mitigated** | 2026-10-26 | [§3.1](#31-l-3-device-deregistration-on-removal) |
+| L-4 | Draft written to disk in the clear | Low | **Fixed** | 2026-10-26 | [§3.2](#32-l-4-drafts-off-persistent-disk) |
+| L-5 | Sender-controlled timestamps | Low | **Fixed** | 2026-10-26 | [§3.3](#33-l-5-show-receive-time-on-skew) |
 | L-6 | Undecryptable envelopes count as unread | Low | **Fixed** | 2026-10-26 | [§2.6](#26-l-6-unread-counter-ignores-unknown-inboxes) |
-| L-7 | Service installers don't escape paths | Low | Open (Phase 3) | | |
-| I-1 | Informational items | Info | Open (Phase 3) | | |
+| L-7 | Service installers don't escape paths | Low | **Fixed** | 2026-10-26 | [§3.4](#34-l-7-escape-service-file-values) |
+| I-1 | Informational items | Info | **Partly fixed / Accepted** | 2026-10-26 | [§3.5](#35-i-1-informational-items) |
 
 ## 1. Phase 1 — before internet exposure (2026-10-25)
 
@@ -274,6 +274,130 @@ counter at 0, a real message raises it to 1, and the junk is dropped silently
 on `yo read` without a user-visible "undecryptable" notice beyond the normal
 drop handling.
 
-## 3. Phase 3 — hardening
+## 3. Phase 3 (2026-10-26)
 
-Not started. Items: L-3, L-4, L-5, L-7, I-1, abuse metrics, independent audit.
+Commit: `<pending>` ("Phase 3 remediation"; see git history). Plan items
+3.1–3.6 of the review. Verification tests are in `crates/yo-cli/tests/limits.rs`
+(Phase 3 section) and crate unit tests, run in CI on every push.
+
+### 3.1 L-3: Device deregistration on removal
+
+**Status: Mitigated** (the locked-stolen-device case is closed; the
+unlocked-device case still needs burning / re-keying, which stays future work
+as the review anticipated).
+
+**Change.** A device now tells the server, at setup, which key is allowed to
+deregister it: a new `Request::BindRevocation { authority, sig }`, where
+`authority` is the account's own self-identity (self-RIK) public key and the
+caller signs over its own mTLS device id. The server stores it in a new
+`revocation` column on `registered`, **first write wins**, so a stolen device
+re-registering cannot overwrite it. `Request::Deregister { device, ts,
+authority, sig }` removes a device's registration, memberships, published keys
+and queued envelopes, but only if `authority` matches the device's stored
+value and the signature and timestamp check out. `yo devices remove` sends a
+`Deregister` (signed by the self-RIK, which every one of your devices holds)
+before taking the device out of the signed device lists.
+
+Because all of a person's devices share the self-RIK, any of them can
+deregister a lost one. A **locked** stolen device cannot: its self-RIK sits in
+the encrypted store, and `yo devices remove` from another device both
+deregisters it and drops it from every inbox. An **unlocked** stolen device
+(passphrase known) holds the self-RIK, so deregistration alone is not enough —
+burning the conversations (which rotates keys) remains the documented remedy.
+
+**Authorization reasoning.** Deregistration is gated on the specific bound
+authority, not on inbox membership, so the griefing path considered during
+review (create an inbox listing a victim's device, then deregister it) does
+not exist: the attacker would need the victim's self-RIK. `BindRevocation`
+only ever sets the *caller's own* device authority (caller == device via
+mTLS), so nobody can pre-bind someone else's device.
+
+**Metadata note.** All of a person's devices bind the same authority key,
+which the server can see — it links those devices. The server can already
+link them (they share a self-inbox device list and appear in the same contact
+inboxes), so this is within the documented metadata exposure, now explicit.
+
+**Verification.**
+- `device_deregistration_is_authorized_and_cuts_off_access`: an outsider's
+  `Deregister` with the wrong authority is `Unauthorized` and leaves access
+  intact; `yo devices remove` then succeeds.
+- `deregistration_requires_the_bound_authority`: a token-mode device
+  deregistered via its bound authority can no longer reconnect
+  (`RegistrationRequired`).
+- `db::tests` cover the first-write-wins binding implicitly via the server
+  tests.
+
+### 3.2 L-4: Drafts off persistent disk
+
+**Status: Fixed.** `edit_message` writes the draft to `Paths::runtime_dir`,
+which prefers `$XDG_RUNTIME_DIR` (a per-user tmpfs on Linux) and falls back to
+the data directory elsewhere, and names it `compose-<pid>.txt`. vim-family
+editors (`vi`/`vim`/`nvim`/`view`) are launched with `-n -i NONE` so they
+leave no swap or viminfo copy. The file is still overwritten and deleted after
+use.
+
+**Residual.** On platforms without a tmpfs runtime dir (and on the data-dir
+fallback) the overwrite-then-delete is best-effort against CoW/journaling
+filesystems; documented. Editors other than vim may keep their own backups.
+
+### 3.3 L-5: Show receive time on skew
+
+**Status: Fixed.** `ui::card` shows `(received <time>)` for an incoming
+message whenever the sender's claimed `sent_at` and our `received_at` differ
+by more than five minutes, so a back- or post-dated message is visible as
+such. `ui::tests::receive_time_shown_only_when_it_diverges` covers both cases.
+
+### 3.4 L-7: Escape service-file values
+
+**Status: Fixed.** `service.rs` rejects control characters in the executable
+path and `YO_HOME`, then escapes them per format: systemd values are
+double-quoted with `\` and `"` escaped (`systemd_quote`), the launchd plist is
+XML-escaped (`xml_escape`), and the Windows action already doubles single
+quotes. A path with spaces, quotes or XML metacharacters now produces a valid
+service definition or a clean refusal, never a malformed or injected one.
+Self-inflicted only (the values come from the user's own environment).
+
+### 3.5 I-1: Informational items
+
+- **Multiple accepted pins — Fixed.** `ServerTrust::Pinned` holds a set of
+  pins; `ClientConfig` gains `extra_pins`. A self-signed certificate can be
+  rotated by adding the new pin, migrating, then dropping the old one, with no
+  lock-out. Verified by `additional_pins_are_accepted`. Documented under
+  server setup (certificate rotation).
+- **SHA-pinned GitHub Actions — Fixed.** `.github/workflows/ci.yml` pins every
+  action to a commit SHA with the version in a comment. `dtolnay/rust-toolchain`
+  is pinned by SHA *and* given an explicit `toolchain: stable` input, since its
+  ref name would otherwise select the toolchain.
+- **Replayable `DeleteInbox` — Accepted.** Burning is idempotent and terminal;
+  a replay has no effect. Adding nonce state to the server for zero security
+  gain is not worth it.
+- **Same-user agent requests — Accepted.** Any process running as your user
+  while the store is unlocked can ask the agent for the key; this is inherent
+  to a passphrase cache (ssh-agent / gpg-agent are the same) and already
+  documented, with `yo lock` and short `--for` as the controls.
+- **`YO_PASSPHRASE` in the environment, Windows pipe ACL — Accepted.** Both are
+  documented limitations in the security model; unchanged.
+- **Unmaintained transitive dependency on unsupported targets — Accepted.**
+  `atomic-polyfill` is not in the Linux/macOS/Windows dependency trees; CI runs
+  `cargo audit` on every push.
+
+### 3.6 Abuse metrics
+
+**Status: Done.** The running server logs a cumulative counter line once a
+minute — `accepted`, `refused_ip`, `refused_device_conn`,
+`refused_registration`, `rate_limited`, `live_mailboxes` — in a fixed format
+for scraping. The counters hold no per-user data. Documented under server
+monitoring.
+
+### 3.7 Independent audit
+
+**Status: Open / external.** Still recommended once the project stabilizes;
+cannot be done in-tree.
+
+## 4. Still open after Phase 3
+
+- **L-3 (unlocked stolen device):** full conversation re-keying on device
+  removal, so a removed device's keys stop working without a manual burn. The
+  review budgeted this at ~3 days and it remains the main outstanding security
+  improvement.
+- **An independent audit of the protocol, the server and the storage format.**

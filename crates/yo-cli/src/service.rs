@@ -10,6 +10,27 @@ fn exe() -> anyhow::Result<PathBuf> {
     Ok(std::env::current_exe()?.canonicalize()?)
 }
 
+/// A value going into a service file. Rejects control characters outright
+/// (they have no legitimate place in a path or `YO_HOME`) so no amount of
+/// escaping has to account for newlines (SECURITY_REVIEW.md L-7).
+fn checked(s: &str, what: &str) -> anyhow::Result<String> {
+    if s.chars().any(|c| c.is_control()) {
+        bail!("{what} contains control characters; refusing to write a service file");
+    }
+    Ok(s.to_string())
+}
+
+#[cfg(target_os = "macos")]
+fn xml_escape(s: &str) -> String {
+    s.replace('&', "&amp;").replace('<', "&lt;").replace('>', "&gt;").replace('"', "&quot;").replace('\'', "&apos;")
+}
+
+/// Quote a value for a systemd unit (double-quoted, backslash-escaped).
+#[cfg(target_os = "linux")]
+fn systemd_quote(s: &str) -> String {
+    format!("\"{}\"", s.replace('\\', "\\\\").replace('"', "\\\""))
+}
+
 fn run(cmd: &mut Command) -> anyhow::Result<()> {
     let out = cmd.output().with_context(|| format!("running {cmd:?}"))?;
     if !out.status.success() {
@@ -30,12 +51,16 @@ mod imp {
     pub fn install() -> anyhow::Result<String> {
         let path = unit_path()?;
         std::fs::create_dir_all(path.parent().expect("has parent"))?;
-        let env = std::env::var("YO_HOME").map(|h| format!("Environment=YO_HOME={h}\n")).unwrap_or_default();
+        let exe = checked(&exe()?.display().to_string(), "executable path")?;
+        let env = match std::env::var("YO_HOME") {
+            Ok(h) => format!("Environment={}\n", systemd_quote(&format!("YO_HOME={}", checked(&h, "YO_HOME")?))),
+            Err(_) => String::new(),
+        };
         let unit = format!(
             "[Unit]\nDescription=yo! message notifier and passphrase agent\nAfter=network-online.target\n\n\
              [Service]\nExecStart={} daemon run\n{env}Restart=on-failure\nRestartSec=5\n\n\
              [Install]\nWantedBy=default.target\n",
-            exe()?.display()
+            systemd_quote(&exe)
         );
         std::fs::write(&path, unit)?;
         run(Command::new("systemctl").args(["--user", "daemon-reload"]))?;
@@ -68,21 +93,25 @@ mod imp {
     pub fn install() -> anyhow::Result<String> {
         let path = plist_path()?;
         std::fs::create_dir_all(path.parent().expect("has parent"))?;
-        let env = std::env::var("YO_HOME")
-            .map(|h| format!("<key>EnvironmentVariables</key><dict><key>YO_HOME</key><string>{h}</string></dict>"))
-            .unwrap_or_default();
+        let exe = xml_escape(&checked(&exe()?.display().to_string(), "executable path")?);
+        let env = match std::env::var("YO_HOME") {
+            Ok(h) => format!(
+                "<key>EnvironmentVariables</key><dict><key>YO_HOME</key><string>{}</string></dict>",
+                xml_escape(&checked(&h, "YO_HOME")?)
+            ),
+            Err(_) => String::new(),
+        };
         let plist = format!(
             r#"<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0"><dict>
   <key>Label</key><string>{LABEL}</string>
-  <key>ProgramArguments</key><array><string>{}</string><string>daemon</string><string>run</string></array>
+  <key>ProgramArguments</key><array><string>{exe}</string><string>daemon</string><string>run</string></array>
   {env}
   <key>RunAtLoad</key><true/>
   <key>KeepAlive</key><dict><key>SuccessfulExit</key><false/></dict>
 </dict></plist>
-"#,
-            exe()?.display()
+"#
         );
         std::fs::write(&path, plist)?;
         let _ = run(Command::new("launchctl").arg("unload").arg(&path));
@@ -107,8 +136,11 @@ mod imp {
     const TASK: &str = "yo daemon";
 
     pub fn install() -> anyhow::Result<String> {
-        let exe = exe()?.display().to_string().replace('\'', "''");
-        let home = std::env::var("YO_HOME").map(|h| format!("$env:YO_HOME='{h}'; ")).unwrap_or_default();
+        let exe = checked(&exe()?.display().to_string(), "executable path")?.replace('\'', "''");
+        let home = match std::env::var("YO_HOME") {
+            Ok(h) => format!("$env:YO_HOME='{}'; ", checked(&h, "YO_HOME")?.replace('\'', "''")),
+            Err(_) => String::new(),
+        };
         let action = format!("powershell.exe -NoProfile -WindowStyle Hidden -Command \"{home}& '{exe}' daemon run\"");
         run(Command::new("schtasks")
             .args(["/Create", "/TN", TASK, "/TR", &action, "/SC", "ONLOGON", "/RL", "LIMITED", "/F"]))?;

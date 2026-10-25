@@ -15,7 +15,7 @@ With `YO_HOME` set, they're all in that one directory.
 | `unread`, `unread.db` | unread counter for the prompt (a number) | no |
 | `daemon.log`, `daemon.pid` | daemon log and process id | no |
 | `yo.lock` | prevents two `yo` commands writing at once | — |
-| `compose.txt` | only while your editor is open, then wiped | no |
+| `compose-<pid>.txt` | a message draft, only while your editor is open, then wiped; written under `$XDG_RUNTIME_DIR` (RAM) when available | no |
 
 **Why `device.key` isn't encrypted:** the daemon must connect to the server
 without knowing your passphrase. The key only proves *which device* is
@@ -30,6 +30,7 @@ What's inside `yo.db`, and what's left in the clear, is described in
 ```toml
 server = "yo.example.com:7443"
 pin = "sha256:uavoahcysxqo5liv366n7ogbm4rvbv3spee2rckftwozso2cfjbq"
+extra_pins = []       # additional pins accepted during a certificate rotation
 unlock_minutes = 15   # agent cache time after last use; 0 = don't cache automatically
 banner = true         # show the yo! banner when running `yo` alone
 ```

@@ -55,9 +55,12 @@ impl Conn {
     pub async fn connect(paths: &Paths, cfg: &ClientConfig, token: Option<String>) -> anyhow::Result<Conn> {
         let chain = tls::load_chain_file(&paths.tls_cert()).context("reading device certificate")?;
         let key = tls::load_key_file(&paths.tls_key()).context("reading device key")?;
-        let trust = match &cfg.pin {
-            Some(p) => ServerTrust::Pinned(tls::parse_pin(p)?),
-            None => ServerTrust::WebPki,
+        let pins = cfg.all_pins();
+        let trust = if pins.is_empty() {
+            ServerTrust::WebPki
+        } else {
+            let parsed: Result<Vec<_>, _> = pins.iter().map(|p| tls::parse_pin(p)).collect();
+            ServerTrust::Pinned(parsed?)
         };
         let tls_cfg = Arc::new(tls::client_config(chain, key, trust)?);
         let (host, port) = split_host(&cfg.server);

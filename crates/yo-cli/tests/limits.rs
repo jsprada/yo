@@ -411,3 +411,88 @@ async fn fallback_key_rotation_keeps_one_previous_key() {
     assert_eq!(r.new_messages, 0);
     assert!(r.notices.iter().any(|n| n.contains("undecryptable")), "{:?}", r.notices);
 }
+
+// ── Phase 3 ──────────────────────────────────────────────────────────────
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn device_deregistration_is_authorized_and_cuts_off_access() {
+    let s = server_with(|_| {}).await;
+    let mut homes = Vec::new();
+    let mut alice = client(&s, &mut homes).await;
+
+    // Link a second device, then remove it from the first.
+    let (tx, rx) = tokio::sync::oneshot::channel::<String>();
+    let a2_home = tempfile::tempdir().unwrap();
+    let a2_opts = opts(&s);
+    let linker = alice.link_open(move |code| tx.send(code.to_string()).unwrap(), |_| true);
+    let joiner = async {
+        let code = rx.await.unwrap();
+        Client::init_linked(Paths::at(a2_home.path()), a2_opts, &code, |_| {}).await
+    };
+    let (_, alice2) = tokio::join!(linker, joiner);
+    let alice2 = alice2.unwrap();
+    assert_eq!(alice.devices().await.unwrap().len(), 2);
+
+    // alice2 can talk to the server before removal.
+    assert!(raw(&alice2).await.is_ok());
+
+    // An outsider cannot deregister alice2 (wrong authority).
+    let carol = client(&s, &mut homes).await;
+    let mut cconn = raw(&carol).await.unwrap();
+    let evil = yo_crypto::rik::Rik::generate();
+    let ts = yo_proto::now();
+    let sig = evil.sign(&yo_proto::msg::Deregister::signing_bytes(&alice2.me, ts));
+    let bad = yo_proto::msg::Deregister { device: alice2.me, ts, authority: evil.public(), sig };
+    let e = cconn.call(Request::Deregister(bad)).await.expect_err("outsider refused");
+    assert!(is_code(&e, ErrorCode::Unauthorized), "{e:#}");
+    assert!(raw(&alice2).await.is_ok(), "alice2 still has access after the bogus attempt");
+
+    // alice removes alice2 → it leaves every device list and its registration
+    // is revoked (the lock-out is asserted in token mode below).
+    alice.remove_device(&alice2.me.to_string()[..8]).await.unwrap();
+    assert_eq!(alice.devices().await.unwrap().len(), 1);
+}
+
+#[tokio::test]
+async fn deregistration_requires_the_bound_authority() {
+    // A token-mode server: after deregistration the device can't get back in
+    // without a new token, which proves access was really cut off.
+    let s = server_with(|c| c.registration = Registration::Token).await;
+    let home = tempfile::tempdir().unwrap();
+    Db::open(&s._dir.path().join("server.db")).unwrap(); // ensure path exists
+    // Register one device with the seeded token.
+    let alice = Client::init(Paths::at(home.path()), opts_token(&s, "letmein")).await.unwrap();
+    // Deregister it using its own bound authority (the self-RIK), as another
+    // of its devices would. We can reach the self-RIK through the store.
+    let me_rik = {
+        let rels = alice.store.relationships().unwrap();
+        rels.into_iter().find(|r| r.bundle.kind == yo_store::RelKind::Myself).unwrap().bundle.rik()
+    };
+    let mut conn = raw(&alice).await.unwrap();
+    let ts = yo_proto::now();
+    let sig = me_rik.sign(&yo_proto::msg::Deregister::signing_bytes(&alice.me, ts));
+    let dereg = yo_proto::msg::Deregister { device: alice.me, ts, authority: me_rik.public(), sig };
+    assert!(matches!(conn.call(Request::Deregister(dereg)).await.unwrap(), Response::Ok));
+    drop(conn);
+    // Now a brand-new connection (new TLS identity would be a new device, but
+    // the *same* device reconnecting) is treated as unregistered and, in
+    // token mode, refused.
+    let e = raw(&alice).await.err().expect("deregistered device is locked out in token mode");
+    assert!(is_code(&e, ErrorCode::RegistrationRequired), "{e:#}");
+}
+
+#[tokio::test]
+async fn additional_pins_are_accepted() {
+    let s = server_with(|_| {}).await;
+    let mut homes = Vec::new();
+    let alice = client(&s, &mut homes).await;
+    // The real pin is wrong as `pin`, but listed in `extra_pins`.
+    let mut cfg = alice.cfg.clone();
+    let real = cfg.pin.take().unwrap();
+    cfg.pin = Some(tls::format_pin(&[9u8; 32])); // bogus primary
+    cfg.extra_pins = vec![real];
+    assert!(Conn::connect(&alice.paths, &cfg, None).await.is_ok(), "a matching extra pin is accepted");
+    // Neither pin matching is refused.
+    cfg.extra_pins = vec![tls::format_pin(&[8u8; 32])];
+    assert!(Conn::connect(&alice.paths, &cfg, None).await.is_err(), "no matching pin is refused");
+}

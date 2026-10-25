@@ -83,6 +83,44 @@ impl DeleteInbox {
     }
 }
 
+/// A device's revocation authority: the public key that is allowed to
+/// deregister it from the server. A device binds this to itself (over its
+/// mTLS identity) once, at setup. See SECURITY_REVIEW.md L-3.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct BindRevocation {
+    pub authority: [u8; 32],
+    pub sig: Vec<u8>,
+}
+
+impl BindRevocation {
+    pub fn signing_bytes(device: &DeviceId, authority: &[u8; 32]) -> Vec<u8> {
+        let mut out = b"yo/bind-revocation/v1".to_vec();
+        out.extend_from_slice(&device.0);
+        out.extend_from_slice(authority);
+        out
+    }
+}
+
+/// Deregister a device, signed by that device's bound revocation authority.
+/// Lets another of your devices turn off a lost one's access even though the
+/// lost device will not cooperate.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Deregister {
+    pub device: DeviceId,
+    pub ts: u64,
+    pub authority: [u8; 32],
+    pub sig: Vec<u8>,
+}
+
+impl Deregister {
+    pub fn signing_bytes(device: &DeviceId, ts: u64) -> Vec<u8> {
+        let mut out = b"yo/deregister/v1".to_vec();
+        out.extend_from_slice(&device.0);
+        out.extend_from_slice(&ts.to_be_bytes());
+        out
+    }
+}
+
 /// Ciphertext addressed to one device of an inbox.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct OutEnvelope {
@@ -179,6 +217,10 @@ pub enum Request {
     },
     /// Keep-alive; answered with `Ok`.
     Ping,
+    /// Bind this device's revocation authority (idempotent; first write wins).
+    BindRevocation(BindRevocation),
+    /// Deregister a device using its bound revocation authority.
+    Deregister(Deregister),
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]

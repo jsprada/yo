@@ -10,6 +10,7 @@
 
 use std::collections::HashMap;
 use std::net::IpAddr;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
@@ -51,6 +52,17 @@ struct IpState {
     refilled: Instant,
 }
 
+/// Cumulative abuse counters, logged once a minute for operators to scrape
+/// (SECURITY_REVIEW.md 3.6). They hold no per-user information.
+#[derive(Default)]
+struct Metrics {
+    accepted: AtomicU64,
+    refused_ip: AtomicU64,
+    refused_device_conn: AtomicU64,
+    refused_registration: AtomicU64,
+    rate_limited: AtomicU64,
+}
+
 pub struct Server {
     db: DbPool,
     mailboxes: Mutex<Mailboxes>,
@@ -63,6 +75,7 @@ pub struct Server {
     device_conns: Mutex<HashMap<DeviceId, u32>>,
     /// Bytes sent per device in the current hour.
     send_bytes: Mutex<HashMap<DeviceId, (Instant, u64)>>,
+    metrics: Metrics,
     limits: Limits,
     registration: Registration,
     ttl_days: u64,
@@ -135,6 +148,7 @@ impl Server {
             ips: Mutex::new(HashMap::new()),
             device_conns: Mutex::new(HashMap::new()),
             send_bytes: Mutex::new(HashMap::new()),
+            metrics: Metrics::default(),
             limits: cfg.limits.clone(),
             registration: cfg.registration,
             ttl_days: cfg.message_ttl_days,
@@ -157,9 +171,11 @@ impl Server {
             let ip = canonical(addr.ip());
             // Admission per IP happens before any TLS work is done.
             let Some(ip_guard) = self.admit_ip(ip) else {
+                self.metrics.refused_ip.fetch_add(1, Ordering::Relaxed);
                 debug!("refused connection from {ip}: per-IP limit");
                 continue;
             };
+            self.metrics.accepted.fetch_add(1, Ordering::Relaxed);
             let me = self.clone();
             let acceptor = acceptor.clone();
             tokio::spawn(async move {
@@ -180,7 +196,21 @@ impl Server {
         {
             info!("expired {r} old records");
         }
-        self.mailboxes.lock().expect("mailbox lock").expire();
+        let live_mailboxes = {
+            let mut mb = self.mailboxes.lock().expect("mailbox lock");
+            mb.expire();
+            mb.len()
+        };
+        let m = &self.metrics;
+        info!(
+            "metrics accepted={} refused_ip={} refused_device_conn={} refused_registration={} rate_limited={} live_mailboxes={}",
+            m.accepted.load(Ordering::Relaxed),
+            m.refused_ip.load(Ordering::Relaxed),
+            m.refused_device_conn.load(Ordering::Relaxed),
+            m.refused_registration.load(Ordering::Relaxed),
+            m.rate_limited.load(Ordering::Relaxed),
+            live_mailboxes,
+        );
         self.windows.lock().expect("windows lock").retain(|_, (t, _)| t.elapsed() < Duration::from_secs(60));
         self.ip_windows.lock().expect("ip windows lock").retain(|_, (t, _)| t.elapsed() < Duration::from_secs(60));
         let full = self.limits.new_connections_per_minute_per_ip as f64;
@@ -261,7 +291,10 @@ impl Server {
         if matches!(resp, Response::Hello { .. }) {
             match self.admit_device(device) {
                 Some(g) => _device_guard = Some(g),
-                None => resp = err(ErrorCode::RateLimited, "too many open connections from this device"),
+                None => {
+                    self.metrics.refused_device_conn.fetch_add(1, Ordering::Relaxed);
+                    resp = err(ErrorCode::RateLimited, "too many open connections from this device");
+                }
             }
         }
         let ok = matches!(resp, Response::Hello { .. });
@@ -317,6 +350,7 @@ impl Server {
                 && t.elapsed() < Duration::from_secs(60)
                 && *n >= max_fail
             {
+                self.metrics.rate_limited.fetch_add(1, Ordering::Relaxed);
                 return err(ErrorCode::RateLimited, "too many registration attempts from your address; wait a minute");
             }
         }
@@ -338,6 +372,7 @@ impl Server {
             }
             Ok(false) => {
                 window_allow(&mut self.ip_windows.lock().expect("ip windows lock"), ip, "register-fail", u32::MAX);
+                self.metrics.refused_registration.fetch_add(1, Ordering::Relaxed);
                 // Stable wording: fail2ban filters match on it (docs/src/server/setup.md).
                 warn!("registration refused device={} ip={ip}", device.short());
                 err(
@@ -385,6 +420,25 @@ impl Server {
                 Err(e) => internal(e),
             },
             Request::DeleteInbox(d) => self.delete_inbox(d).await,
+            Request::BindRevocation(b) => {
+                let authority = b.authority;
+                let sig = b.sig;
+                if yo_crypto::rik::verify(
+                    &authority,
+                    &yo_proto::msg::BindRevocation::signing_bytes(&me, &authority),
+                    &sig,
+                )
+                .is_err()
+                {
+                    return err(ErrorCode::Unauthorized, "bad signature");
+                }
+                // A device binds only its *own* authority (caller == device).
+                match self.db.run(move |db| db.bind_revocation(&me, &authority)).await {
+                    Ok(()) => Response::Ok,
+                    Err(e) => internal(e),
+                }
+            }
+            Request::Deregister(d) => self.deregister(d).await,
             Request::MailboxOpen => {
                 if !self.allow(&me, "mailbox", 20) {
                     return err(ErrorCode::RateLimited, "too many invites, wait a minute");
@@ -598,6 +652,35 @@ impl Server {
             }
         }
         Response::Ok
+    }
+
+    async fn deregister(&self, d: yo_proto::msg::Deregister) -> Response {
+        if now().abs_diff(d.ts) > 86400 {
+            return err(ErrorCode::BadRequest, "request expired; check your clock");
+        }
+        if yo_crypto::rik::verify(&d.authority, &yo_proto::msg::Deregister::signing_bytes(&d.device, d.ts), &d.sig)
+            .is_err()
+        {
+            return err(ErrorCode::Unauthorized, "bad signature");
+        }
+        let device = d.device;
+        let authority = d.authority;
+        let bound = match self.db.run(move |db| db.revocation_of(&device)).await {
+            Ok(b) => b,
+            Err(e) => return internal(e),
+        };
+        match bound {
+            Some(a) if a == authority => {}
+            // No bound authority, or a different one: refuse. Never reveal which.
+            _ => return err(ErrorCode::Unauthorized, "not authorized to deregister that device"),
+        }
+        match self.db.run(move |db| db.deregister(&device)).await {
+            Ok(()) => {
+                info!("deregistered device {}", device.short());
+                Response::Ok
+            }
+            Err(e) => internal(e),
+        }
     }
 
     async fn delete_inbox(&self, d: DeleteInbox) -> Response {

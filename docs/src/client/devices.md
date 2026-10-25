@@ -87,17 +87,26 @@ $ yo devices remove eh67
 ```
 
 Removing takes the device out of the signed device list of every
-conversation, so nobody encrypts new messages to it. The server deletes its
-one-time keys and anything queued for it. You can't remove the device you're
-using. Do it from another one.
+conversation, so nobody encrypts new messages to it. It also asks the server
+to **deregister** that device, so its network access is cut off: the server
+forgets its registration, keys and queued messages, and (on a token server)
+it would need a fresh token to reconnect. This works because each device, at
+setup, tells the server which key may later remove it — your account's own
+identity key, which only your devices hold. The server deletes its one-time
+keys and anything queued for it. You can't remove the device you're using; do
+it from another one.
 
 ### If a device is lost or stolen
 
 Its data is encrypted with that device's passphrase. If the passphrase is
-strong and unknown to the thief, removing the device is enough.
+strong and unknown to the thief, removing the device is enough: its data
+stays encrypted and `yo devices remove` deregisters it, so it can't even
+collect ciphertext from the server any more.
 
-If you think the thief **knows the passphrase**, remember that every device
-holds the keys for your conversations (that's what lets it sign device lists
-and read messages). After `yo devices remove`, also
-[burn](burn.md) any conversation that matters and re-add those contacts.
-That creates fresh keys the old device never had.
+If you think the thief **knows the passphrase**, removing the device is *not*
+enough on its own. Every device holds the keys for your conversations (that's
+what lets it sign device lists and read messages), and a thief who can unlock
+the device has those keys and your account identity key too — so they could,
+in principle, keep acting until each conversation's keys change. After
+`yo devices remove`, also [burn](burn.md) any conversation that matters and
+re-add those contacts. That creates fresh keys the old device never had.

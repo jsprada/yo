@@ -100,11 +100,22 @@ fn edit_message(paths: &Paths, to: &str) -> anyhow::Result<String> {
     let editor = std::env::var("VISUAL")
         .or_else(|_| std::env::var("EDITOR"))
         .unwrap_or_else(|_| if cfg!(windows) { "notepad".into() } else { "vi".into() });
-    let file = paths.data_dir.join("compose.txt");
+    // Prefer a RAM-backed runtime dir (tmpfs) so the plaintext draft never
+    // reaches persistent storage (SECURITY_REVIEW.md L-4).
+    let dir = paths.runtime_dir();
+    let file = dir.join(format!("compose-{}.txt", std::process::id()));
     yo_store::write_private(&file, format!("\n# Message to {to}. Lines starting with # are ignored.\n").as_bytes())?;
     let mut parts = editor.split_whitespace();
     let prog = parts.next().unwrap_or("vi");
-    let status = std::process::Command::new(prog).args(parts).arg(&file).status();
+    let mut cmd = std::process::Command::new(prog);
+    cmd.args(parts);
+    // Keep vim-family editors from leaving swap/undo/backup copies behind.
+    if let Some(base) = std::path::Path::new(prog).file_stem().and_then(|s| s.to_str())
+        && matches!(base, "vi" | "vim" | "nvim" | "view")
+    {
+        cmd.args(["-n", "-i", "NONE"]);
+    }
+    let status = cmd.arg(&file).status();
     let text = std::fs::read_to_string(&file).unwrap_or_default();
     // Overwrite before deleting so the draft doesn't linger on disk.
     let _ = std::fs::write(&file, vec![0u8; text.len()]);

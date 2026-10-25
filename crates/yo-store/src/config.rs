@@ -13,6 +13,10 @@ pub struct ClientConfig {
     /// server uses a CA-issued certificate.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub pin: Option<String>,
+    /// Extra pins accepted during certificate rotation. Add the new pin here,
+    /// move everyone over, then make it the primary `pin` and drop the old.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub extra_pins: Vec<String>,
     /// How long `yo unlock` (and a passphrase typed at a prompt) keeps the
     /// store unlocked in the agent, in minutes. 0 disables caching.
     #[serde(default = "default_ttl")]
@@ -30,6 +34,11 @@ fn yes() -> bool {
 }
 
 impl ClientConfig {
+    /// All accepted pins (primary first). Empty when the server uses web PKI.
+    pub fn all_pins(&self) -> Vec<&str> {
+        self.pin.iter().chain(self.extra_pins.iter()).map(|s| s.as_str()).collect()
+    }
+
     pub fn load(paths: &Paths) -> Result<ClientConfig> {
         let text = std::fs::read_to_string(paths.config()).map_err(|e| match e.kind() {
             std::io::ErrorKind::NotFound => StoreError::NotInitialized,

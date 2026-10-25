@@ -83,7 +83,9 @@ devices.
   device's key.
 - **The server** is authenticated by its pinned public-key hash (or the web
   PKI if it has a CA certificate). This protects metadata and availability.
-  Message confidentiality doesn't depend on it.
+  Message confidentiality doesn't depend on it. A client can trust more than
+  one pin at a time so a self-signed certificate can be rotated without
+  locking anyone out (see [Server setup](../server/setup.md#3-certificate-pin-or-ca)).
 
 ## In transit
 
@@ -157,8 +159,12 @@ period so in-flight session setups still decrypt.
 
 - **Stolen device with known passphrase.** Every one of your devices holds
   your conversations' RIKs, so a thief who can unlock one could keep using
-  it. `yo devices remove` plus burning important conversations is the
-  remedy. See [Devices](../client/devices.md).
+  it. `yo devices remove` deregisters the device on the server (cutting off a
+  *locked* stolen device completely) and removes it from every device list,
+  but a thief who knows the passphrase still holds the keys; burning the
+  important conversations and re-adding those contacts is the remedy, because
+  that rotates the keys. See [Devices](../client/devices.md). Full automatic
+  re-keying on removal is future work.
 - **Modified clients** can ignore burn requests. No messenger can prevent
   this.
 - **The agent** hands the key to any process running as your user while

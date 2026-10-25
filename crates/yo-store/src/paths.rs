@@ -77,6 +77,16 @@ impl Paths {
     pub fn lock(&self) -> PathBuf {
         self.data_dir.join("yo.lock")
     }
+    /// A directory for short-lived plaintext (e.g. a message draft). Prefers a
+    /// RAM-backed per-user runtime dir so the content never hits a disk.
+    pub fn runtime_dir(&self) -> PathBuf {
+        if std::env::var_os("YO_HOME").is_none()
+            && let Some(rt) = std::env::var_os("XDG_RUNTIME_DIR").filter(|v| !v.is_empty())
+        {
+            return PathBuf::from(rt);
+        }
+        self.data_dir.clone()
+    }
     /// Total unread count, read by the shell prompt snippet.
     pub fn unread(&self) -> PathBuf {
         self.state_dir.join("unread")

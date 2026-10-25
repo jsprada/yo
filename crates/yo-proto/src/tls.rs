@@ -94,8 +94,10 @@ pub fn load_key_file(path: &Path) -> std::io::Result<PrivateKeyDer<'static>> {
 /// How the client decides the server is genuine.
 #[derive(Clone, Debug)]
 pub enum ServerTrust {
-    /// Accept only a certificate whose SPKI hashes to this value.
-    Pinned([u8; 32]),
+    /// Accept a certificate whose SPKI hashes to any of these values. More
+    /// than one allows a pin to be rotated: add the new pin, migrate, then
+    /// drop the old one (see the docs on pin rotation).
+    Pinned(Vec<[u8; 32]>),
     /// Normal CA validation against the Mozilla root store.
     WebPki,
 }
@@ -108,9 +110,9 @@ pub fn client_config(
     let builder =
         rustls::ClientConfig::builder_with_provider(provider()).with_protocol_versions(&[&rustls::version::TLS13])?;
     let mut cfg = match trust {
-        ServerTrust::Pinned(pin) => builder
+        ServerTrust::Pinned(pins) => builder
             .dangerous()
-            .with_custom_certificate_verifier(Arc::new(PinnedServer { pin, algs: algs() }))
+            .with_custom_certificate_verifier(Arc::new(PinnedServer { pins, algs: algs() }))
             .with_client_auth_cert(chain, key)?,
         ServerTrust::WebPki => {
             let roots = rustls::RootCertStore { roots: webpki_roots::TLS_SERVER_ROOTS.to_vec() };
@@ -137,7 +139,7 @@ pub fn server_name(host: &str) -> Result<ServerName<'static>, TlsError> {
 
 #[derive(Debug)]
 struct PinnedServer {
-    pin: [u8; 32],
+    pins: Vec<[u8; 32]>,
     algs: WebPkiSupportedAlgorithms,
 }
 
@@ -152,7 +154,7 @@ impl ServerCertVerifier for PinnedServer {
     ) -> Result<ServerCertVerified, rustls::Error> {
         let hash =
             spki_hash(end_entity).map_err(|_| rustls::Error::InvalidCertificate(CertificateError::BadEncoding))?;
-        if hash == self.pin {
+        if self.pins.contains(&hash) {
             Ok(ServerCertVerified::assertion())
         } else {
             Err(rustls::Error::InvalidCertificate(CertificateError::ApplicationVerificationFailure))
@@ -246,6 +248,7 @@ mod tests {
         let chain = load_chain(cert.as_bytes()).unwrap();
         let h = spki_hash(&chain[0]).unwrap();
         assert_eq!(parse_pin(&format_pin(&h)).unwrap(), h);
+        let _ = ServerTrust::Pinned(vec![h]);
         assert!(parse_pin("md5:abc").is_err());
     }
 }

@@ -155,7 +155,13 @@ impl Client {
             yo_store::write_private(&paths.tls_cert(), cert.as_bytes())?;
             yo_store::write_private(&paths.tls_key(), key.as_bytes())?;
         }
-        let cfg = ClientConfig { server: opts.server.clone(), pin: opts.pin.clone(), unlock_minutes: 15, banner: true };
+        let cfg = ClientConfig {
+            server: opts.server.clone(),
+            pin: opts.pin.clone(),
+            extra_pins: vec![],
+            unlock_minutes: 15,
+            banner: true,
+        };
         let conn = Conn::connect(&paths, &cfg, opts.token.clone()).await?;
         let (kf, dk) = KeyFile::create(&opts.passphrase, opts.kdf)?;
         kf.save(&paths.keyfile())?;
@@ -175,7 +181,19 @@ impl Client {
         let mut c = Self::prepare(paths, &opts).await?;
         c.create_relationship(RelKind::Myself, "me".into(), Rik::generate(), None, true, now()).await?;
         c.finish_setup()?;
+        let _ = c.bind_revocation().await;
         Ok(c)
+    }
+
+    /// Tell the server which key may later deregister this device (our own
+    /// account's self-identity key). First write wins on the server, so a
+    /// stolen device cannot rebind it. Best-effort: retried on later syncs.
+    async fn bind_revocation(&mut self) -> anyhow::Result<()> {
+        let rik = self.myself()?.bundle.rik();
+        let authority = rik.public();
+        let sig = rik.sign(&yo_proto::msg::BindRevocation::signing_bytes(&self.me, &authority));
+        self.call(Request::BindRevocation(yo_proto::msg::BindRevocation { authority, sig })).await?;
+        Ok(())
     }
 
     /// `yo init --link CODE`: join an existing account from another device.
@@ -204,6 +222,7 @@ impl Client {
             c.join_contact(cs).await?;
         }
         c.finish_setup()?;
+        let _ = c.bind_revocation().await;
         Ok(c)
     }
 
@@ -1007,6 +1026,16 @@ impl Client {
         };
         if target.device == self.me {
             bail!("you can't remove the device you are using; run this on another device");
+        }
+        // Turn off the removed device's server access as well as taking it out
+        // of the device lists. Best-effort: it only works if that device bound
+        // a revocation authority at setup (SECURITY_REVIEW.md L-3).
+        if let Ok(me_rel) = self.myself() {
+            let rik = me_rel.bundle.rik();
+            let ts = now();
+            let sig = rik.sign(&yo_proto::msg::Deregister::signing_bytes(&target.device, ts));
+            let dereg = yo_proto::msg::Deregister { device: target.device, ts, authority: rik.public(), sig };
+            let _ = self.call(Request::Deregister(dereg)).await;
         }
         for mut rel in self.store.relationships()? {
             let rik = rel.bundle.rik();

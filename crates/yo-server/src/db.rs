@@ -21,7 +21,8 @@ PRAGMA secure_delete = ON;
 PRAGMA foreign_keys = ON;
 CREATE TABLE IF NOT EXISTS registered (
     device BLOB PRIMARY KEY,
-    registered_at INTEGER NOT NULL
+    registered_at INTEGER NOT NULL,
+    revocation BLOB
 );
 CREATE TABLE IF NOT EXISTS tokens (
     token TEXT PRIMARY KEY,
@@ -76,12 +77,14 @@ impl Db {
         let conn = Connection::open(path)?;
         conn.busy_timeout(std::time::Duration::from_secs(5))?;
         conn.execute_batch(SCHEMA)?;
+        Self::migrate(&conn)?;
         Ok(Db { conn })
     }
 
     pub fn open_in_memory() -> rusqlite::Result<Db> {
         let conn = Connection::open_in_memory()?;
         conn.execute_batch(SCHEMA)?;
+        Self::migrate(&conn)?;
         Ok(Db { conn })
     }
 
@@ -100,6 +103,50 @@ impl Db {
             params![&device.0[..], now as i64],
         )?;
         Ok(())
+    }
+
+    /// Add any columns missing from an older database.
+    fn migrate(conn: &Connection) -> rusqlite::Result<()> {
+        let has_revocation = conn
+            .prepare("PRAGMA table_info(registered)")?
+            .query_map([], |r| r.get::<_, String>(1))?
+            .filter_map(|c| c.ok())
+            .any(|c| c == "revocation");
+        if !has_revocation {
+            conn.execute("ALTER TABLE registered ADD COLUMN revocation BLOB", [])?;
+        }
+        Ok(())
+    }
+
+    /// Record a device's revocation authority. First write wins, so a device
+    /// that already bound one (or an attacker re-registering a stolen device)
+    /// cannot overwrite it.
+    pub fn bind_revocation(&self, device: &DeviceId, authority: &[u8; 32]) -> rusqlite::Result<()> {
+        self.conn.execute(
+            "UPDATE registered SET revocation = ?2 WHERE device = ?1 AND revocation IS NULL",
+            params![&device.0[..], &authority[..]],
+        )?;
+        Ok(())
+    }
+
+    pub fn revocation_of(&self, device: &DeviceId) -> rusqlite::Result<Option<[u8; 32]>> {
+        let v: Option<Option<Vec<u8>>> = self
+            .conn
+            .query_row("SELECT revocation FROM registered WHERE device = ?1", [&device.0[..]], |r| r.get(0))
+            .optional()?;
+        Ok(v.flatten().and_then(|b| b.try_into().ok()))
+    }
+
+    /// Remove a device entirely: its registration, its memberships, its
+    /// published keys and anything queued for it.
+    pub fn deregister(&mut self, device: &DeviceId) -> rusqlite::Result<()> {
+        let d = &device.0[..];
+        let tx = self.conn.transaction()?;
+        tx.execute("DELETE FROM registered WHERE device = ?1", [d])?;
+        tx.execute("DELETE FROM members WHERE device = ?1", [d])?;
+        tx.execute("DELETE FROM prekeys WHERE device = ?1", [d])?;
+        tx.execute("DELETE FROM envelopes WHERE device = ?1", [d])?;
+        tx.commit()
     }
 
     /// Register `device` by consuming one use of `token`, atomically: if the
