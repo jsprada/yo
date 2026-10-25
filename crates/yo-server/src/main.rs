@@ -145,9 +145,8 @@ async fn main() -> anyhow::Result<()> {
             let cfg = Config::load(&dir)?;
             let tls = yo_server::tls_config(&dir, &cfg)?;
             let db = open_db(&dir)?;
-            let listener = tokio::net::TcpListener::bind(&cfg.listen)
-                .await
-                .with_context(|| format!("binding {}", cfg.listen))?;
+            let listener =
+                tokio::net::TcpListener::bind(&cfg.listen).await.with_context(|| format!("binding {}", cfg.listen))?;
             tracing::info!("yo-server listening on {} (registration: {:?})", cfg.listen, cfg.registration);
             if let Some(p) = yo_server::pin(&dir, &cfg)? {
                 tracing::info!("certificate pin: {p}");

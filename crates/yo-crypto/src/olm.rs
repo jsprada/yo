@@ -103,12 +103,7 @@ impl OlmState {
             let sig = acct.sign(SignedPreKey::signing_bytes(inbox, &curve, fallback));
             SignedPreKey { curve25519: curve, fallback, sig: sig.to_bytes().to_vec() }
         };
-        let otks = self
-            .account
-            .one_time_keys()
-            .into_values()
-            .map(|k| sign(&self.account, k, false))
-            .collect();
+        let otks = self.account.one_time_keys().into_values().map(|k| sign(&self.account, k, false)).collect();
         let fallback = if new_fallback {
             self.account.generate_fallback_key();
             self.account.fallback_key().into_values().next().map(|k| sign(&self.account, k, true))
@@ -156,12 +151,7 @@ impl OlmState {
 
     /// Encrypt for `remote` with the most recently used session.
     pub fn encrypt(&mut self, remote: &[u8; 32], plaintext: &[u8]) -> Result<Vec<u8>, CryptoError> {
-        let (_, session) = self
-            .sessions
-            .iter_mut()
-            .rev()
-            .find(|(r, _)| r == remote)
-            .ok_or(CryptoError::NoSession)?;
+        let (_, session) = self.sessions.iter_mut().rev().find(|(r, _)| r == remote).ok_or(CryptoError::NoSession)?;
         let msg = session.encrypt(plaintext).map_err(|e| CryptoError::Olm(e.to_string()))?;
         let (kind, body) = msg.to_parts();
         let wire = WireCipher { sender: self.curve25519(), kind: kind as u8, body };

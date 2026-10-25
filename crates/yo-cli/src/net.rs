@@ -62,20 +62,17 @@ impl Conn {
             .map_err(|_| anyhow!("timed out connecting to {}", cfg.server))?
             .with_context(|| format!("cannot reach {}", cfg.server))?;
         tcp.set_nodelay(true)?;
-        let stream = TlsConnector::from(tls_cfg)
-            .connect(tls::server_name(&host)?, tcp)
-            .await
-            .map_err(|e| {
-                if e.to_string().contains("ApplicationVerificationFailure") {
-                    anyhow!(
-                        "the server's certificate does not match your pinned fingerprint — \
+        let stream = TlsConnector::from(tls_cfg).connect(tls::server_name(&host)?, tcp).await.map_err(|e| {
+            if e.to_string().contains("ApplicationVerificationFailure") {
+                anyhow!(
+                    "the server's certificate does not match your pinned fingerprint — \
                          someone may be impersonating {}, or the server was re-installed",
-                        cfg.server
-                    )
-                } else {
-                    anyhow!("TLS handshake with {} failed: {e}", cfg.server)
-                }
-            })?;
+                    cfg.server
+                )
+            } else {
+                anyhow!("TLS handshake with {} failed: {e}", cfg.server)
+            }
+        })?;
         let mut conn = Conn { framed: FramedConn::new(stream), events: VecDeque::new(), device: DeviceId([0; 16]) };
         match conn.call(Request::Hello { version: PROTOCOL_VERSION, token }).await? {
             Response::Hello { device, .. } => conn.device = device,

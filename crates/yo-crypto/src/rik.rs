@@ -44,8 +44,7 @@ impl Rik {
 pub fn verify(public: &[u8; 32], msg: &[u8], sig: &[u8]) -> Result<(), CryptoError> {
     let key = VerifyingKey::from_bytes(public).map_err(|_| CryptoError::BadKey)?;
     let sig: [u8; 64] = sig.try_into().map_err(|_| CryptoError::BadSignature)?;
-    key.verify_strict(msg, &Signature::from_bytes(&sig))
-        .map_err(|_| CryptoError::BadSignature)
+    key.verify_strict(msg, &Signature::from_bytes(&sig)).map_err(|_| CryptoError::BadSignature)
 }
 
 #[cfg(test)]

@@ -52,17 +52,14 @@ impl Mailboxes {
         loop {
             for _ in 0..32 {
                 let n = 1 + getrandom::u32().expect("os rng") % (range - 1);
-                if !self.boxes.contains_key(&n) {
-                    self.boxes.insert(
-                        n,
-                        Mailbox {
-                            created: Instant::now(),
-                            joined: false,
-                            opener: vec![],
-                            joiner: vec![],
-                            notify: Arc::new(Notify::new()),
-                        },
-                    );
+                if let std::collections::hash_map::Entry::Vacant(e) = self.boxes.entry(n) {
+                    e.insert(Mailbox {
+                        created: Instant::now(),
+                        joined: false,
+                        opener: vec![],
+                        joiner: vec![],
+                        notify: Arc::new(Notify::new()),
+                    });
                     return n;
                 }
             }
@@ -111,12 +108,8 @@ impl Mailboxes {
     }
 
     pub fn expire(&mut self) {
-        let dead: Vec<u32> = self
-            .boxes
-            .iter()
-            .filter(|(_, m)| m.created.elapsed() > MAILBOX_TTL)
-            .map(|(n, _)| *n)
-            .collect();
+        let dead: Vec<u32> =
+            self.boxes.iter().filter(|(_, m)| m.created.elapsed() > MAILBOX_TTL).map(|(n, _)| *n).collect();
         for n in dead {
             self.close(n);
         }

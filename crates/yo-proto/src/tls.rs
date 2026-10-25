@@ -105,8 +105,8 @@ pub fn client_config(
     key: PrivateKeyDer<'static>,
     trust: ServerTrust,
 ) -> Result<rustls::ClientConfig, TlsError> {
-    let builder = rustls::ClientConfig::builder_with_provider(provider())
-        .with_protocol_versions(&[&rustls::version::TLS13])?;
+    let builder =
+        rustls::ClientConfig::builder_with_provider(provider()).with_protocol_versions(&[&rustls::version::TLS13])?;
     let mut cfg = match trust {
         ServerTrust::Pinned(pin) => builder
             .dangerous()
@@ -150,7 +150,8 @@ impl ServerCertVerifier for PinnedServer {
         _ocsp_response: &[u8],
         _now: UnixTime,
     ) -> Result<ServerCertVerified, rustls::Error> {
-        let hash = spki_hash(end_entity).map_err(|_| rustls::Error::InvalidCertificate(CertificateError::BadEncoding))?;
+        let hash =
+            spki_hash(end_entity).map_err(|_| rustls::Error::InvalidCertificate(CertificateError::BadEncoding))?;
         if hash == self.pin {
             Ok(ServerCertVerified::assertion())
         } else {

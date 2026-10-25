@@ -27,10 +27,7 @@ pub const MAX_FRAME: usize = 2 * 1024 * 1024;
 
 /// Current UNIX time in seconds.
 pub fn now() -> u64 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_secs())
-        .unwrap_or(0)
+    std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0)
 }
 
 /// Lowercase, unpadded base32 — used for every human-visible identifier.
@@ -40,7 +37,5 @@ pub fn b32(bytes: &[u8]) -> String {
 
 /// Decode [`b32`] output (case-insensitive).
 pub fn from_b32(s: &str) -> Option<Vec<u8>> {
-    data_encoding::BASE32_NOPAD
-        .decode(s.trim().to_ascii_uppercase().as_bytes())
-        .ok()
+    data_encoding::BASE32_NOPAD.decode(s.trim().to_ascii_uppercase().as_bytes()).ok()
 }

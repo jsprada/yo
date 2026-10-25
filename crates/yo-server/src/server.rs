@@ -29,12 +29,13 @@ const MAX_BLOB: usize = 300 * 1024;
 const FETCH_LIMIT: usize = 200;
 
 type Subscribers = HashMap<DeviceId, Vec<mpsc::UnboundedSender<Envelope>>>;
+type RateLimits = HashMap<(DeviceId, &'static str), (Instant, u32)>;
 
 pub struct Server {
     db: Mutex<Db>,
     mailboxes: Mutex<Mailboxes>,
     subs: Mutex<Subscribers>,
-    limits: Mutex<HashMap<(DeviceId, &'static str), (Instant, u32)>>,
+    limits: Mutex<RateLimits>,
     registration: Registration,
     ttl_days: u64,
     max_devices: usize,
@@ -91,10 +92,10 @@ impl Server {
             .lock()
             .expect("db lock")
             .expire(n.saturating_sub(self.ttl_days * 86400), n.saturating_sub(30 * 86400));
-        if let Ok(r) = removed {
-            if r > 0 {
-                info!("expired {r} old records");
-            }
+        if let Ok(r) = removed
+            && r > 0
+        {
+            info!("expired {r} old records");
         }
         self.mailboxes.lock().expect("mailbox lock").expire();
         self.limits.lock().expect("limits lock").retain(|_, (t, _)| t.elapsed() < Duration::from_secs(60));

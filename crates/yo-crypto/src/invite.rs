@@ -54,10 +54,7 @@ pub fn new_code(nameplate: u32) -> String {
 /// dashes are forgiven. Returns `(nameplate, normalized_code)`.
 pub fn parse_code(input: &str) -> Result<(u32, String), CryptoError> {
     let lower = input.trim().to_ascii_lowercase();
-    let parts: Vec<&str> = lower
-        .split(|c: char| c == '-' || c.is_whitespace())
-        .filter(|p| !p.is_empty())
-        .collect();
+    let parts: Vec<&str> = lower.split(|c: char| c == '-' || c.is_whitespace()).filter(|p| !p.is_empty()).collect();
     if parts.len() != 1 + CODE_WORDS {
         return Err(CryptoError::BadCode);
     }
@@ -75,7 +72,8 @@ pub struct Pake {
 
 /// Begin the exchange. Send the returned bytes to the other side.
 pub fn start(code: &str, purpose: Purpose) -> (Pake, Vec<u8>) {
-    let (state, msg) = Spake2::<Ed25519Group>::start_symmetric(&Password::new(code.as_bytes()), &Identity::new(purpose.label()));
+    let (state, msg) =
+        Spake2::<Ed25519Group>::start_symmetric(&Password::new(code.as_bytes()), &Identity::new(purpose.label()));
     (Pake { state, purpose }, msg)
 }
 

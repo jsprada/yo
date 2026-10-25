@@ -37,9 +37,7 @@ pub fn argon2id(passphrase: &[u8], salt: &[u8], p: KdfParams) -> Result<Key32, C
 /// HKDF-SHA256 expand to a 32-byte key.
 pub fn hkdf(ikm: &[u8], salt: &[u8], info: &[u8]) -> Key32 {
     let mut out = Zeroizing::new([0u8; 32]);
-    Hkdf::<Sha256>::new(Some(salt), ikm)
-        .expand(info, out.as_mut())
-        .expect("32 bytes is a valid HKDF output length");
+    Hkdf::<Sha256>::new(Some(salt), ikm).expand(info, out.as_mut()).expect("32 bytes is a valid HKDF output length");
     out
 }
 

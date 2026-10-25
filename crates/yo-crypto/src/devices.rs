@@ -4,8 +4,8 @@ use vodozemac::{Ed25519PublicKey, Ed25519Signature};
 use yo_proto::InboxId;
 use yo_proto::msg::{DeviceEntry, DeviceList, SignedDeviceList, SignedPreKey};
 
-use crate::rik::{Rik, verify};
 use crate::CryptoError;
+use crate::rik::{Rik, verify};
 
 pub fn sign_list(rik: &Rik, list: DeviceList) -> SignedDeviceList {
     let sig = rik.sign(&list.signing_bytes());
@@ -18,10 +18,10 @@ pub fn verify_list(signed: &SignedDeviceList, pinned_rik: Option<&[u8; 32]>) -> 
     if InboxId::from_rik(&signed.rik) != signed.list.inbox {
         return Err(CryptoError::WrongIdentity);
     }
-    if let Some(p) = pinned_rik {
-        if p != &signed.rik {
-            return Err(CryptoError::WrongIdentity);
-        }
+    if let Some(p) = pinned_rik
+        && p != &signed.rik
+    {
+        return Err(CryptoError::WrongIdentity);
     }
     verify(&signed.rik, &signed.list.signing_bytes(), &signed.sig)?;
     for d in &signed.list.devices {

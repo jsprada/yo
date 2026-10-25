@@ -124,10 +124,15 @@ impl Side {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Request {
     /// First request on every connection.
-    Hello { version: u16, token: Option<String> },
+    Hello {
+        version: u16,
+        token: Option<String>,
+    },
     /// Create an inbox or replace its device list (join / remove device).
     PutDeviceList(SignedDeviceList),
-    GetDeviceList { inbox: InboxId },
+    GetDeviceList {
+        inbox: InboxId,
+    },
     /// Replace this device's published one-time keys in `inbox`.
     PublishKeys {
         inbox: InboxId,
@@ -135,21 +140,43 @@ pub enum Request {
         fallback: Option<SignedPreKey>,
     },
     /// Number of unclaimed one-time keys this device has left in `inbox`.
-    KeyCount { inbox: InboxId },
+    KeyCount {
+        inbox: InboxId,
+    },
     /// Take one one-time key (or the fallback key) of `device` in `inbox`.
-    ClaimKey { inbox: InboxId, device: DeviceId },
-    Send { inbox: InboxId, envelopes: Vec<OutEnvelope> },
+    ClaimKey {
+        inbox: InboxId,
+        device: DeviceId,
+    },
+    Send {
+        inbox: InboxId,
+        envelopes: Vec<OutEnvelope>,
+    },
     Fetch,
-    Ack { ids: Vec<u64> },
+    Ack {
+        ids: Vec<u64>,
+    },
     /// Ask the server to push new envelopes as [`Event::Envelope`].
     Subscribe,
     DeleteInbox(DeleteInbox),
     MailboxOpen,
-    MailboxJoin { nameplate: u32 },
-    MailboxPut { nameplate: u32, side: Side, msg: Vec<u8> },
+    MailboxJoin {
+        nameplate: u32,
+    },
+    MailboxPut {
+        nameplate: u32,
+        side: Side,
+        msg: Vec<u8>,
+    },
     /// Long-poll for message number `index` written by the *other* side.
-    MailboxGet { nameplate: u32, side: Side, index: u32 },
-    MailboxClose { nameplate: u32 },
+    MailboxGet {
+        nameplate: u32,
+        side: Side,
+        index: u32,
+    },
+    MailboxClose {
+        nameplate: u32,
+    },
     /// Keep-alive; answered with `Ok`.
     Ping,
 }

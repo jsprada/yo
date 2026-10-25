@@ -1,1 +1,713 @@
-fn main() {}
+use std::io::{IsTerminal, Read, Write};
+
+use anyhow::{Context, anyhow, bail};
+use clap::{Parser, Subcommand};
+use yo_cli::client::{Client, InitOptions, RESERVED};
+use yo_cli::prompt::Shell;
+use yo_cli::ui;
+use yo_cli::{agent, daemon, service};
+use yo_crypto::Key32;
+use yo_crypto::kdf::KdfParams;
+use yo_store::{ClientConfig, KeyFile, Paths, StoreError, spool};
+
+const AFTER_HELP: &str = "\
+Send a message:
+  yo <name> <message>        e.g.  yo alice \"lunch at noon?\"
+  yo <name>                  compose in $EDITOR (or pipe text on stdin)
+
+First steps:
+  yo init --server HOST:PORT --pin sha256:...   set up this device
+  yo add bob                                    show a code for bob
+  yo add alice 7-crossbow-marble-tundra         use the code alice gave you
+  yo prompt bash                                prompt indicator snippet
+
+Docs: https://github.com/jsprada/yo (docs/ folder)";
+
+/// yo! — private, end-to-end encrypted messages from your terminal.
+#[derive(Parser)]
+#[command(name = "yo", version, about, after_help = AFTER_HELP, args_conflicts_with_subcommands = true)]
+struct Cli {
+    #[command(subcommand)]
+    cmd: Option<Cmd>,
+}
+
+#[derive(Subcommand)]
+enum Cmd {
+    /// Set up yo! on this device (or join your account with --link).
+    Init {
+        /// Server address, HOST:PORT.
+        #[arg(long)]
+        server: String,
+        /// Server certificate pin printed by `yo-server init` (sha256:...).
+        #[arg(long)]
+        pin: Option<String>,
+        /// Registration token from the server operator.
+        #[arg(long, env = "YO_TOKEN")]
+        token: Option<String>,
+        /// Link this device to your existing account with a code from `yo link`.
+        #[arg(long, value_name = "CODE")]
+        link: Option<String>,
+    },
+    /// Add a contact: without CODE shows a code to give them; with CODE uses theirs.
+    Add {
+        /// Your name for this contact (only you see it).
+        name: String,
+        /// The invite code they gave you, e.g. 7-crossbow-marble-tundra.
+        code: Vec<String>,
+        /// Also show the code as a QR code.
+        #[arg(long)]
+        qr: bool,
+    },
+    /// Show new messages.
+    Read,
+    /// Reply to message number N.
+    Reply {
+        /// The message number shown by `yo read` (e.g. 12 or #12).
+        number: String,
+        /// Your reply (omit to use $EDITOR or stdin).
+        message: Vec<String>,
+    },
+    /// Show the conversation with a contact.
+    History {
+        name: String,
+        /// How many messages to show.
+        #[arg(short = 'n', long, default_value_t = 20)]
+        count: usize,
+    },
+    /// List your contacts.
+    Contacts,
+    /// Rename a contact (on all your devices).
+    Rename { old: String, new: String },
+    /// Permanently destroy a conversation, on both sides.
+    Burn {
+        name: String,
+        /// Don't ask for confirmation.
+        #[arg(long)]
+        yes: bool,
+        /// Only destroy your local copy (use when the server is unreachable).
+        #[arg(long)]
+        local: bool,
+    },
+    /// Show safety words to compare with a contact.
+    Verify { name: String },
+    /// Show a code to set up yo! on another device of yours.
+    Link {
+        /// Also show the code as a QR code.
+        #[arg(long)]
+        qr: bool,
+    },
+    /// List (or remove) your devices.
+    Devices {
+        #[command(subcommand)]
+        cmd: Option<DevicesCmd>,
+    },
+    /// Cache your passphrase in the agent (starts the daemon if needed).
+    Unlock {
+        /// Minutes to stay unlocked after last use.
+        #[arg(long = "for", value_name = "MINUTES")]
+        minutes: Option<u64>,
+    },
+    /// Forget the cached passphrase now.
+    Lock,
+    /// Change your passphrase.
+    Passwd,
+    /// Fetch new messages now.
+    Sync {
+        /// Never prompt or print (for the prompt snippet's background refresh).
+        #[arg(long, short)]
+        quiet: bool,
+    },
+    /// Background notifier + passphrase agent.
+    Daemon {
+        #[command(subcommand)]
+        cmd: DaemonCmd,
+    },
+    /// Print a shell snippet that shows yo!(N) in your prompt.
+    Prompt {
+        #[arg(value_enum)]
+        shell: Shell,
+        /// Also refresh in the background from the prompt (if you don't run the daemon).
+        #[arg(long)]
+        sync: bool,
+    },
+    /// Show connection, lock and unread status.
+    Status,
+    #[command(external_subcommand)]
+    Send(Vec<String>),
+}
+
+#[derive(Subcommand)]
+enum DevicesCmd {
+    /// Remove a lost or old device from all your conversations.
+    Remove {
+        /// Device id (or its first characters) from `yo devices`.
+        id: String,
+    },
+}
+
+#[derive(Subcommand)]
+enum DaemonCmd {
+    /// Run in the foreground.
+    Run,
+    /// Start in the background.
+    Start,
+    /// Stop the running daemon.
+    Stop,
+    /// Show whether it is running.
+    Status,
+    /// Start automatically at login (systemd / launchd / Task Scheduler).
+    Install,
+    /// Remove the login service.
+    Uninstall,
+}
+
+#[tokio::main]
+async fn main() {
+    let cli = Cli::parse();
+    let paths = Paths::from_env();
+    if let Err(e) = run(cli, paths).await {
+        let msg = match e.downcast_ref::<StoreError>() {
+            Some(StoreError::NotInitialized) => {
+                "yo! isn't set up on this device yet. Start with:\n  yo init --server HOST:PORT --pin sha256:..."
+                    .to_string()
+            }
+            _ => format!("{e:#}"),
+        };
+        ui::error(&msg);
+        std::process::exit(1);
+    }
+}
+
+fn interactive() -> bool {
+    std::io::stdin().is_terminal()
+}
+
+fn read_passphrase(prompt: &str) -> anyhow::Result<String> {
+    if let Ok(p) = std::env::var("YO_PASSPHRASE") {
+        return Ok(p);
+    }
+    if !interactive() {
+        bail!("yo! is locked. Run `yo unlock` first (or set YO_PASSPHRASE for scripts)");
+    }
+    Ok(rpassword::prompt_password(prompt)?)
+}
+
+fn new_passphrase() -> anyhow::Result<String> {
+    if let Ok(p) = std::env::var("YO_PASSPHRASE") {
+        return Ok(p);
+    }
+    println!("{}", ui::dim("Choose a passphrase. It encrypts everything yo! stores on this device."));
+    loop {
+        let a = rpassword::prompt_password("New passphrase: ")?;
+        if a.chars().count() < 8 {
+            ui::warn("use at least 8 characters (a few random words work well)");
+            continue;
+        }
+        let b = rpassword::prompt_password("Repeat passphrase: ")?;
+        if a == b {
+            return Ok(a);
+        }
+        ui::warn("the two passphrases differ, try again");
+    }
+}
+
+/// Get the data key: environment, then the agent, then an interactive prompt.
+async fn data_key(paths: &Paths, cfg: &ClientConfig) -> anyhow::Result<Key32> {
+    if let Ok(p) = std::env::var("YO_PASSPHRASE") {
+        return Client::unlock(paths, &p);
+    }
+    if let Some(k) = agent::get_key(paths).await {
+        return Ok(k);
+    }
+    let kf = KeyFile::load(&paths.keyfile())?;
+    for attempt in 0..3 {
+        let p = read_passphrase("Passphrase: ")?;
+        match kf.unlock(&p) {
+            Ok(dk) => {
+                if cfg.unlock_minutes > 0 {
+                    let _ = agent::unlock(paths, &dk, cfg.unlock_minutes).await;
+                }
+                return Ok(dk);
+            }
+            Err(StoreError::WrongPassphrase) if attempt < 2 => ui::warn("wrong passphrase"),
+            Err(e) => return Err(e.into()),
+        }
+    }
+    bail!("wrong passphrase")
+}
+
+async fn open(paths: &Paths) -> anyhow::Result<Client> {
+    let cfg = ClientConfig::load(paths)?;
+    let dk = data_key(paths, &cfg).await?;
+    Client::open(paths.clone(), dk)
+}
+
+fn edit_message(paths: &Paths, to: &str) -> anyhow::Result<String> {
+    if !interactive() {
+        let mut s = String::new();
+        std::io::stdin().read_to_string(&mut s)?;
+        return Ok(s.trim_end().to_string());
+    }
+    let editor = std::env::var("VISUAL")
+        .or_else(|_| std::env::var("EDITOR"))
+        .unwrap_or_else(|_| if cfg!(windows) { "notepad".into() } else { "vi".into() });
+    let file = paths.data_dir.join("compose.txt");
+    yo_store::write_private(&file, format!("\n# Message to {to}. Lines starting with # are ignored.\n").as_bytes())?;
+    let mut parts = editor.split_whitespace();
+    let prog = parts.next().unwrap_or("vi");
+    let status = std::process::Command::new(prog).args(parts).arg(&file).status();
+    let text = std::fs::read_to_string(&file).unwrap_or_default();
+    // Overwrite before deleting so the draft doesn't linger on disk.
+    let _ = std::fs::write(&file, vec![0u8; text.len()]);
+    let _ = std::fs::remove_file(&file);
+    status.with_context(|| format!("could not start editor '{editor}'"))?;
+    let body: Vec<&str> = text.lines().filter(|l| !l.starts_with('#')).collect();
+    Ok(body.join("\n").trim().to_string())
+}
+
+fn message_from(paths: &Paths, words: &[String], to: &str) -> anyhow::Result<String> {
+    if words.is_empty() { edit_message(paths, to) } else { Ok(words.join(" ")) }
+}
+
+fn edit_distance(a: &str, b: &str) -> usize {
+    let b: Vec<char> = b.chars().collect();
+    let mut prev: Vec<usize> = (0..=b.len()).collect();
+    for (i, ca) in a.chars().enumerate() {
+        let mut cur = vec![i + 1];
+        for (j, cb) in b.iter().enumerate() {
+            cur.push((prev[j] + (ca != *cb) as usize).min(prev[j + 1] + 1).min(cur[j] + 1));
+        }
+        prev = cur;
+    }
+    prev[b.len()]
+}
+
+fn print_code(code: &str, qr: bool) {
+    println!("\n     {}\n", ui::accent(code));
+    if qr && let Ok(q) = qrcode::QrCode::new(code.as_bytes()) {
+        let img = q
+            .render::<qrcode::render::unicode::Dense1x2>()
+            .dark_color(qrcode::render::unicode::Dense1x2::Light)
+            .light_color(qrcode::render::unicode::Dense1x2::Dark)
+            .build();
+        println!("{img}\n");
+    }
+}
+
+fn report_offline(r: &yo_cli::client::SyncReport, quiet: bool) {
+    if quiet {
+        return;
+    }
+    if let Some(e) = &r.offline {
+        ui::warn(&format!("offline ({e}); showing what was already downloaded"));
+    }
+    for n in &r.notices {
+        ui::info(n);
+    }
+}
+
+async fn run(cli: Cli, paths: Paths) -> anyhow::Result<()> {
+    let Some(cmd) = cli.cmd else {
+        return overview(&paths).await;
+    };
+    match cmd {
+        Cmd::Init { server, pin, token, link } => {
+            println!("{}\n", ui::banner());
+            if pin.is_none() {
+                ui::warn("no --pin given: the server must have a certificate from a public CA");
+            }
+            let passphrase = new_passphrase()?;
+            let opts = InitOptions { server: server.clone(), pin, token, passphrase, kdf: KdfParams::DEFAULT };
+            let client = match &link {
+                Some(code) => {
+                    ui::info("linking to your account… (keep `yo link` running on your other device)");
+                    Client::init_linked(paths.clone(), opts, code).await?
+                }
+                None => Client::init(paths.clone(), opts).await?,
+            };
+            ui::ok(&format!("yo! is ready on this device ({})", ui::dim(&client.me.short())));
+            if link.is_some() {
+                ui::ok(&format!("linked — {} contact(s) copied from your other device", client.contacts()?.len()));
+            }
+            println!("\nNext:");
+            for (cmd, what) in [
+                ("yo add <name>", "add someone"),
+                ("yo prompt bash", "unread indicator for your prompt (also zsh, fish, powershell)"),
+                ("yo daemon install", "background notifier + passphrase agent"),
+            ] {
+                println!("  {}  {}", ui::bold(&format!("{cmd:<18}")), ui::dim(what));
+            }
+        }
+
+        Cmd::Add { name, code, qr } => {
+            let mut c = open(&paths).await?;
+            let rel = if code.is_empty() {
+                let who = name.clone();
+
+                c.add_open(&name, move |code| {
+                    println!("{}", ui::rule(&format!("invite for {who}")));
+                    println!(" Give {who} this code (read it out, or send it somewhere you trust):");
+                    print_code(code, qr);
+                    println!(" They run:  {}", ui::bold(&format!("yo add <your-name> {code}")));
+                    println!(
+                        " {}",
+                        ui::dim("Waiting… the code works once and expires in 10 minutes (Ctrl-C to cancel).")
+                    );
+                })
+                .await?
+            } else {
+                c.add_join(&name, &code.join("-")).await?
+            };
+            let words = c.safety_words(&rel.bundle.nickname)?;
+            ui::ok(&format!("{} added — keys exchanged and verified by the code", ui::name(&rel.bundle.nickname)));
+            println!("  {} {}", ui::dim("safety words:"), words.join(" "));
+            println!("  Say hi:  {}", ui::bold(&format!("yo {} hey!", rel.bundle.nickname)));
+        }
+
+        Cmd::Read => {
+            let mut c = open(&paths).await?;
+            let r = c.sync().await?;
+            report_offline(&r, false);
+            let rows = c.take_unread()?;
+            if rows.is_empty() {
+                println!("{}", ui::dim("No new messages."));
+                return Ok(());
+            }
+            println!(" {} {}", ui::accent("yo!"), ui::dim(&format!("── {} new", rows.len())));
+            for (row, rel) in &rows {
+                let quote = row.msg.reply_to.and_then(|u| c.quoted(rel, &u));
+                print!("{}", ui::card(row, &rel.bundle.nickname, quote.as_ref(), true));
+            }
+        }
+
+        Cmd::Reply { number, message } => {
+            let n: i64 =
+                number.trim_start_matches('#').parse().map_err(|_| anyhow!("'{number}' is not a message number"))?;
+            let mut c = open(&paths).await?;
+            let text = message_from(&paths, &message, &format!("message #{n}"))?;
+            let (name, _, rep) = c.reply(n, &text).await?;
+            ui::ok(&format!("replied to {} {}", ui::name(&name), ui::dim(&devices_note(&rep))));
+        }
+
+        Cmd::History { name, count } => {
+            let mut c = open(&paths).await?;
+            let r = c.sync().await?;
+            report_offline(&r, false);
+            let rel = c.contact(&name)?;
+            let rows = c.store.history(&rel, count)?;
+            println!("{}", ui::rule(&rel.bundle.nickname));
+            if rows.is_empty() {
+                println!("{}", ui::dim("   no messages yet"));
+            }
+            let mut ids = Vec::new();
+            for row in &rows {
+                let quote = row.msg.reply_to.and_then(|u| c.quoted(&rel, &u));
+                print!("{}", ui::history_line(row, &rel.bundle.nickname, quote.as_ref()));
+                if !row.read {
+                    ids.push(row.id);
+                }
+            }
+            c.store.mark_read(&ids)?;
+            c.refresh_unread();
+        }
+
+        Cmd::Contacts => {
+            let c = open(&paths).await?;
+            let unread = c.store.unread_by_rel()?;
+            let contacts = c.contacts()?;
+            if contacts.is_empty() {
+                println!("{}", ui::dim("No contacts yet. Add one with `yo add <name>`."));
+            }
+            for r in contacts {
+                let n = unread.get(&r.id).copied().unwrap_or(0);
+                let badge = if n > 0 { ui::accent(&format!("{n} new")) } else { String::new() };
+                let v = if r.bundle.verified { ui::me("✔ verified") } else { ui::red("? unverified") };
+                println!(
+                    " {:<20} {}  {}  {}",
+                    ui::name(&r.bundle.nickname),
+                    v,
+                    ui::dim(&format!("since {}", ui::when(r.bundle.created_at))),
+                    badge
+                );
+            }
+        }
+
+        Cmd::Rename { old, new } => {
+            let mut c = open(&paths).await?;
+            c.rename(&old, &new).await?;
+            ui::ok(&format!("{old} is now {}", ui::name(&new)));
+        }
+
+        Cmd::Burn { name, yes, local } => {
+            let mut c = open(&paths).await?;
+            let rel = c.contact(&name)?;
+            let nick = rel.bundle.nickname.clone();
+            if !yes {
+                if !interactive() {
+                    bail!("refusing to burn without confirmation; pass --yes");
+                }
+                println!("{} This permanently destroys your conversation with {}:", ui::red("💥"), ui::name(&nick));
+                println!("   • every message and key for it on this device and your other devices");
+                println!("   • {nick}'s devices are told to destroy their copy as well");
+                println!(
+                    "   {}",
+                    ui::dim(&format!(
+                        "(yo! on {nick}'s side complies automatically; a modified client could keep a copy)"
+                    ))
+                );
+                print!(" Type {} to confirm: ", ui::bold(&nick));
+                std::io::stdout().flush()?;
+                let mut answer = String::new();
+                std::io::stdin().read_line(&mut answer)?;
+                if !answer.trim().eq_ignore_ascii_case(&nick) {
+                    bail!("not confirmed; nothing was burned");
+                }
+            }
+            match c.burn(&nick, local).await? {
+                Some(rep) => {
+                    ui::ok(&format!("burned — {nick}'s devices and yours were told {}", ui::dim(&devices_note(&rep))))
+                }
+                None => ui::ok("burned your local copy (nobody was notified)"),
+            }
+        }
+
+        Cmd::Verify { name } => {
+            let c = open(&paths).await?;
+            let words = c.safety_words(&name)?;
+            println!(" Safety words for {}:\n", ui::name(&name));
+            println!("     {}\n", ui::accent(&words.join("  ")));
+            println!(" Compare them with {name} in person or on the phone.");
+            println!(" If they match, nobody is in the middle of your conversation.");
+        }
+
+        Cmd::Link { qr } => {
+            let mut c = open(&paths).await?;
+            let cfg = c.cfg.clone();
+            let id = c
+                .link_open(move |code| {
+                    println!("{}", ui::rule("link a new device"));
+                    println!(" On the new device run:\n");
+                    let mut cmd = format!("yo init --server {}", cfg.server);
+                    if let Some(p) = &cfg.pin {
+                        cmd.push_str(&format!(" --pin {p}"));
+                    }
+                    cmd.push_str(&format!(" --link {code}"));
+                    println!("     {}", ui::bold(&cmd));
+                    print_code(code, qr);
+                    println!(" {}", ui::dim("Waiting… the code works once and expires in 10 minutes."));
+                })
+                .await?;
+            ui::ok(&format!("linked device {}", ui::accent(&id.short())));
+        }
+
+        Cmd::Devices { cmd } => {
+            let mut c = open(&paths).await?;
+            match cmd {
+                None => {
+                    let devs = c.devices().await?;
+                    println!(" Your devices:");
+                    for d in devs {
+                        let this = if d.device == c.me { ui::me(" (this device)") } else { String::new() };
+                        println!(
+                            "   {}  {}{this}",
+                            ui::accent(&d.device.short()),
+                            ui::dim(&format!("added {}", ui::when(d.added_at)))
+                        );
+                    }
+                    println!(" {}", ui::dim("Remove a lost device with: yo devices remove <id>"));
+                }
+                Some(DevicesCmd::Remove { id }) => {
+                    let d = c.remove_device(&id).await?;
+                    ui::ok(&format!("removed device {} from all conversations", d.device.short()));
+                    ui::warn(
+                        "if that device was stolen and its passphrase is known, also burn sensitive conversations",
+                    );
+                }
+            }
+        }
+
+        Cmd::Unlock { minutes } => {
+            let cfg = ClientConfig::load(&paths)?;
+            let minutes = minutes.unwrap_or(if cfg.unlock_minutes == 0 { 15 } else { cfg.unlock_minutes });
+            let kf = KeyFile::load(&paths.keyfile())?;
+            let dk = kf.unlock(&read_passphrase("Passphrase: ")?)?;
+            if agent::status(&paths).await.is_none() {
+                daemon::spawn_background(&paths)?;
+                if !daemon::wait_until_up(&paths).await {
+                    bail!("the daemon did not start; see {}", paths.daemon_log().display());
+                }
+            }
+            agent::unlock(&paths, &dk, minutes).await?;
+            ui::ok(&format!("unlocked for {minutes} minutes after last use"));
+        }
+
+        Cmd::Lock => match agent::request(&paths, agent::AgentReq::Lock).await {
+            Ok(_) => ui::ok("locked"),
+            Err(_) => ui::ok("locked (the agent wasn't running)"),
+        },
+
+        Cmd::Passwd => {
+            let kf = KeyFile::load(&paths.keyfile())?;
+            let old = rpassword::prompt_password("Current passphrase: ")?;
+            kf.unlock(&old)?;
+            let new = new_passphrase()?;
+            kf.rewrap(&old, &new)?.save(&paths.keyfile())?;
+            ui::ok("passphrase changed");
+        }
+
+        Cmd::Sync { quiet } => {
+            let cfg = ClientConfig::load(&paths)?;
+            let key = if quiet { agent::get_key(&paths).await } else { Some(data_key(&paths, &cfg).await?) };
+            match key {
+                Some(dk) => {
+                    let mut c = Client::open(paths.clone(), dk)?;
+                    let r = c.sync().await?;
+                    report_offline(&r, quiet);
+                    if !quiet {
+                        let n = c.store.unread_count()?;
+                        ui::ok(&format!("{} unread", n));
+                    }
+                }
+                None => {
+                    // Locked: download (still encrypted) without decrypting.
+                    if let Ok(mut conn) = yo_cli::net::Conn::connect(&paths, &cfg, None).await {
+                        let _ = yo_cli::client::download_to_spool(&mut conn, &paths).await;
+                    }
+                    let _ = spool::refresh_unread(&paths, None);
+                }
+            }
+        }
+
+        Cmd::Daemon { cmd } => match cmd {
+            DaemonCmd::Run => daemon::run(paths).await?,
+            DaemonCmd::Start => {
+                if agent::status(&paths).await.is_some() {
+                    ui::ok("already running");
+                } else {
+                    daemon::spawn_background(&paths)?;
+                    if daemon::wait_until_up(&paths).await {
+                        ui::ok("daemon started");
+                    } else {
+                        bail!("the daemon did not start; see {}", paths.daemon_log().display());
+                    }
+                }
+            }
+            DaemonCmd::Stop => match agent::request(&paths, agent::AgentReq::Shutdown).await {
+                Ok(_) => ui::ok("daemon stopped"),
+                Err(_) => ui::ok("daemon was not running"),
+            },
+            DaemonCmd::Status => match agent::status(&paths).await {
+                Some(s) => {
+                    ui::ok(&format!("running (pid {})", s.pid));
+                    println!("   server: {}", if s.connected { ui::me("connected") } else { ui::red("disconnected") });
+                    match s.unlocked_for {
+                        Some(t) => println!("   store:  unlocked ({}m left)", t / 60 + 1),
+                        None => println!("   store:  locked"),
+                    }
+                    if let Some(e) = s.last_error {
+                        println!("   last error: {}", ui::dim(&e));
+                    }
+                }
+                None => println!("{}", ui::dim("not running — start it with `yo daemon start` or `yo daemon install`")),
+            },
+            DaemonCmd::Install => {
+                ClientConfig::load(&paths)?;
+                ui::ok(&service::install()?);
+            }
+            DaemonCmd::Uninstall => ui::ok(&service::uninstall()?),
+        },
+
+        Cmd::Prompt { shell, sync } => {
+            let unread = std::path::absolute(paths.unread())?;
+            print!("{}", yo_cli::prompt::snippet(shell, &unread, sync));
+        }
+
+        Cmd::Status => status(&paths).await?,
+
+        Cmd::Send(args) => {
+            let name = args.first().cloned().unwrap_or_default();
+            let mut c = open(&paths).await?;
+            if c.contact(&name).is_err() {
+                let typo = |r: &&&str| {
+                    let d = edit_distance(r, &name.to_ascii_lowercase());
+                    d == 1 || (d == 2 && r.len() >= 4)
+                };
+                if let Some(cmd) = RESERVED.iter().find(typo) {
+                    bail!("no contact named '{name}'. Did you mean `yo {cmd}`?");
+                }
+                c.contact(&name)?;
+            }
+            let text = message_from(&paths, &args[1..], &name)?;
+            let (_, rep) = c.send_text(&name, &text, None).await?;
+            ui::ok(&format!(
+                "sent to {} {}",
+                ui::name(&c.contact(&name)?.bundle.nickname),
+                ui::dim(&devices_note(&rep))
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn devices_note(r: &yo_cli::client::SendReport) -> String {
+    let mut s = format!("({} device{}", r.delivered_to, if r.delivered_to == 1 { "" } else { "s" });
+    if r.skipped > 0 {
+        s.push_str(&format!(", {} unreachable", r.skipped));
+    }
+    s.push(')');
+    s
+}
+
+async fn overview(paths: &Paths) -> anyhow::Result<()> {
+    let cfg = match ClientConfig::load(paths) {
+        Ok(c) => c,
+        Err(StoreError::NotInitialized) => {
+            println!("{}\n", ui::banner());
+            println!(" Private, end-to-end encrypted messages from your terminal.\n");
+            println!(" Get started:  {}", ui::bold("yo init --server HOST:PORT --pin sha256:..."));
+            println!(" Help:         {}", ui::bold("yo --help"));
+            return Ok(());
+        }
+        Err(e) => return Err(e.into()),
+    };
+    if cfg.banner {
+        println!("{}\n", ui::banner());
+    }
+    let n = spool::read_unread(paths);
+    if n > 0 {
+        println!(
+            " {} {}",
+            ui::accent(&format!("{n} new message{}", if n == 1 { "" } else { "s" })),
+            ui::dim("— yo read")
+        );
+    } else {
+        println!(" {}", ui::dim("No new messages."));
+    }
+    println!(" {}", ui::dim("yo <name> <message> · yo read · yo reply <#> · yo contacts · yo --help"));
+    Ok(())
+}
+
+async fn status(paths: &Paths) -> anyhow::Result<()> {
+    let cfg = ClientConfig::load(paths)?;
+    println!(" server:   {}", cfg.server);
+    println!(" pin:      {}", cfg.pin.as_deref().unwrap_or("(web PKI)"));
+    match yo_proto::tls::load_chain_file(&paths.tls_cert()).ok().and_then(|c| yo_proto::tls::spki_hash(&c[0]).ok()) {
+        Some(h) => println!(" device:   {}", yo_proto::DeviceId::from_spki_hash(&h).short()),
+        None => println!(" device:   {}", ui::red("certificate missing")),
+    }
+    println!(" data:     {}", paths.data_dir.display());
+    match agent::status(paths).await {
+        Some(s) => {
+            println!(" daemon:   running, {}", if s.connected { "connected" } else { "not connected" });
+            println!(" store:    {}", if s.unlocked_for.is_some() { "unlocked" } else { "locked" });
+        }
+        None => println!(" daemon:   not running"),
+    }
+    let t = std::time::Instant::now();
+    match yo_cli::net::Conn::connect(paths, &cfg, None).await {
+        Ok(_) => println!(" network:  {} ({} ms)", ui::me("ok"), t.elapsed().as_millis()),
+        Err(e) => println!(" network:  {}", ui::red(&format!("{e:#}"))),
+    }
+    println!(" unread:   {}", spool::read_unread(paths));
+    Ok(())
+}

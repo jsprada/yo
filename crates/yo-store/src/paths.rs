@@ -87,7 +87,15 @@ impl Paths {
         self.state_dir.join("daemon.log")
     }
     /// Unix socket path for the agent (Unix only; Windows uses a named pipe).
+    ///
+    /// Prefers the per-user runtime directory (`$XDG_RUNTIME_DIR`, mode 0700)
+    /// because socket paths are limited to ~100 bytes; otherwise it lives in
+    /// the data directory.
     pub fn agent_socket(&self) -> PathBuf {
+        if let Some(rt) = std::env::var_os("XDG_RUNTIME_DIR").filter(|v| !v.is_empty()) {
+            let h = yo_crypto::kdf::hmac(b"yo-agent-socket", self.data_dir.to_string_lossy().as_bytes());
+            return PathBuf::from(rt).join(format!("yo-{}.sock", &yo_proto::b32(&h)[..16]));
+        }
         self.data_dir.join("agent.sock")
     }
     /// Stable per-home name for the Windows named pipe.

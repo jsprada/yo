@@ -29,10 +29,9 @@ pub fn write(paths: &Paths, env: &Envelope) -> std::io::Result<()> {
 /// All spooled envelopes in delivery order.
 pub fn list(paths: &Paths) -> std::io::Result<Vec<(PathBuf, Envelope)>> {
     let mut files: Vec<PathBuf> = match std::fs::read_dir(paths.spool()) {
-        Ok(rd) => rd
-            .filter_map(|e| e.ok().map(|e| e.path()))
-            .filter(|p| p.extension().is_some_and(|x| x == "env"))
-            .collect(),
+        Ok(rd) => {
+            rd.filter_map(|e| e.ok().map(|e| e.path())).filter(|p| p.extension().is_some_and(|x| x == "env")).collect()
+        }
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => vec![],
         Err(e) => return Err(e),
     };
@@ -53,9 +52,7 @@ pub fn list(paths: &Paths) -> std::io::Result<Vec<(PathBuf, Envelope)>> {
 pub fn incoming_count(paths: &Paths) -> u64 {
     std::fs::read_dir(paths.spool())
         .map(|rd| {
-            rd.filter_map(|e| e.ok())
-                .filter(|e| e.file_name().to_string_lossy().ends_with(".o.env"))
-                .count() as u64
+            rd.filter_map(|e| e.ok()).filter(|e| e.file_name().to_string_lossy().ends_with(".o.env")).count() as u64
         })
         .unwrap_or(0)
 }
@@ -66,18 +63,12 @@ pub fn refresh_unread(paths: &Paths, db_unread: Option<u64>) -> std::io::Result<
     if let Some(n) = db_unread {
         crate::write_private(&paths.unread_db(), n.to_string().as_bytes())?;
     }
-    let db = std::fs::read_to_string(paths.unread_db())
-        .ok()
-        .and_then(|s| s.trim().parse::<u64>().ok())
-        .unwrap_or(0);
+    let db = std::fs::read_to_string(paths.unread_db()).ok().and_then(|s| s.trim().parse::<u64>().ok()).unwrap_or(0);
     let total = db + incoming_count(paths);
     crate::write_private(&paths.unread(), total.to_string().as_bytes())?;
     Ok(total)
 }
 
 pub fn read_unread(paths: &Paths) -> u64 {
-    std::fs::read_to_string(paths.unread())
-        .ok()
-        .and_then(|s| s.trim().parse().ok())
-        .unwrap_or(0)
+    std::fs::read_to_string(paths.unread()).ok().and_then(|s| s.trim().parse().ok()).unwrap_or(0)
 }

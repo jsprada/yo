@@ -2452,6 +2452,7 @@ dependencies = [
  "anyhow",
  "chrono",
  "clap",
+ "directories",
  "getrandom 0.4.3",
  "interprocess",
  "owo-colors",

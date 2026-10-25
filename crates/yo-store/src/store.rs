@@ -24,12 +24,12 @@ CREATE TABLE IF NOT EXISTS canary (
     blob BLOB NOT NULL
 );
 CREATE TABLE IF NOT EXISTS relationships (
-    id INTEGER PRIMARY KEY,
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
     bundle BLOB NOT NULL,
     olm BLOB NOT NULL
 );
 CREATE TABLE IF NOT EXISTS messages (
-    id INTEGER PRIMARY KEY,
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
     rel_id INTEGER NOT NULL,
     tag BLOB NOT NULL UNIQUE,
     read INTEGER NOT NULL,
@@ -106,30 +106,30 @@ impl Store {
 
     pub fn relationships(&self) -> Result<Vec<Relationship>> {
         let mut st = self.conn.prepare("SELECT id, bundle FROM relationships ORDER BY id")?;
-        let rows: Vec<(i64, Vec<u8>)> = st.query_map([], |r| Ok((r.get(0)?, r.get(1)?)))?.collect::<std::result::Result<_, _>>()?;
-        rows.into_iter()
-            .map(|(id, blob)| Ok(Relationship { id, bundle: self.open_bundle(id, &blob)? }))
-            .collect()
+        let rows: Vec<(i64, Vec<u8>)> =
+            st.query_map([], |r| Ok((r.get(0)?, r.get(1)?)))?.collect::<std::result::Result<_, _>>()?;
+        rows.into_iter().map(|(id, blob)| Ok(Relationship { id, bundle: self.open_bundle(id, &blob)? })).collect()
     }
 
     pub fn relationship(&self, id: i64) -> Result<Option<Relationship>> {
-        let blob: Option<Vec<u8>> = self
-            .conn
-            .query_row("SELECT bundle FROM relationships WHERE id = ?1", [id], |r| r.get(0))
-            .optional()?;
+        let blob: Option<Vec<u8>> =
+            self.conn.query_row("SELECT bundle FROM relationships WHERE id = ?1", [id], |r| r.get(0)).optional()?;
         blob.map(|b| Ok(Relationship { id, bundle: self.open_bundle(id, &b)? })).transpose()
     }
 
     pub fn insert_relationship(&mut self, bundle: Bundle, olm: &OlmState) -> Result<Relationship> {
+        // Ids are never reused (AUTOINCREMENT); the row is created first so
+        // its id can be bound into the ciphertext as associated data.
         let tx = self.conn.transaction()?;
-        let id: i64 = tx.query_row("SELECT COALESCE(MAX(id), 0) + 1 FROM relationships", [], |r| r.get(0))?;
+        tx.execute("INSERT INTO relationships (bundle, olm) VALUES (X'', X'')", [])?;
+        let id = tx.last_insert_rowid();
         let rel = Relationship { id, bundle };
         let b = {
             let pt = yo_crypto::Zeroizing::new(serde_json::to_vec(&rel.bundle).expect("serializable"));
             aead::seal(&self.dk, format!("rel:{id}").as_bytes(), &pt)
         };
         let o = aead::seal(&rel.bundle.rsk, format!("olm:{id}").as_bytes(), &olm.to_bytes());
-        tx.execute("INSERT INTO relationships (id, bundle, olm) VALUES (?1, ?2, ?3)", params![id, b, o])?;
+        tx.execute("UPDATE relationships SET bundle = ?2, olm = ?3 WHERE id = ?1", params![id, b, o])?;
         tx.commit()?;
         Ok(rel)
     }
@@ -143,7 +143,8 @@ impl Store {
     }
 
     pub fn load_olm(&self, rel: &Relationship) -> Result<OlmState> {
-        let blob: Vec<u8> = self.conn.query_row("SELECT olm FROM relationships WHERE id = ?1", [rel.id], |r| r.get(0))?;
+        let blob: Vec<u8> =
+            self.conn.query_row("SELECT olm FROM relationships WHERE id = ?1", [rel.id], |r| r.get(0))?;
         let pt = yo_crypto::Zeroizing::new(aead::open(&rel.bundle.rsk, format!("olm:{}", rel.id).as_bytes(), &blob)?);
         Ok(OlmState::from_bytes(&pt)?)
     }
@@ -183,13 +184,15 @@ impl Store {
         if exists.is_some() {
             return Ok(None);
         }
-        let id: i64 = tx.query_row("SELECT COALESCE(MAX(id), 0) + 1 FROM messages", [], |r| r.get(0))?;
+        // Message numbers are what `yo reply N` uses, so they are never reused.
+        tx.execute(
+            "INSERT INTO messages (rel_id, tag, read, blob) VALUES (?1, ?2, ?3, X'')",
+            params![rel.id, &tag[..], read],
+        )?;
+        let id = tx.last_insert_rowid();
         let pt = yo_crypto::Zeroizing::new(serde_json::to_vec(msg).expect("serializable"));
         let blob = aead::seal(&rel.bundle.rsk, format!("msg:{id}:{}", rel.id).as_bytes(), &pt);
-        tx.execute(
-            "INSERT INTO messages (id, rel_id, tag, read, blob) VALUES (?1, ?2, ?3, ?4, ?5)",
-            params![id, rel.id, &tag[..], read, blob],
-        )?;
+        tx.execute("UPDATE messages SET blob = ?2 WHERE id = ?1", params![id, blob])?;
         tx.commit()?;
         Ok(Some(id))
     }
@@ -199,7 +202,14 @@ impl Store {
         Ok(self.conn.query_row("SELECT id FROM messages WHERE tag = ?1", [&tag[..]], |r| r.get(0)).optional()?)
     }
 
-    fn decode(&self, rels: &HashMap<i64, &Relationship>, id: i64, rel_id: i64, read: bool, blob: &[u8]) -> Result<MessageRow> {
+    fn decode(
+        &self,
+        rels: &HashMap<i64, &Relationship>,
+        id: i64,
+        rel_id: i64,
+        read: bool,
+        blob: &[u8],
+    ) -> Result<MessageRow> {
         let rel = rels.get(&rel_id).ok_or_else(|| corrupt("message without relationship"))?;
         let pt = yo_crypto::Zeroizing::new(aead::open(&rel.bundle.rsk, format!("msg:{id}:{rel_id}").as_bytes(), blob)?);
         let msg = serde_json::from_slice(&pt).map_err(|_| corrupt("message"))?;
@@ -216,9 +226,7 @@ impl Store {
     }
 
     pub fn message(&self, rels: &[Relationship], id: i64) -> Result<Option<MessageRow>> {
-        Ok(self
-            .query_messages(rels, "SELECT id, rel_id, read, blob FROM messages WHERE id = ?1", [id])?
-            .pop())
+        Ok(self.query_messages(rels, "SELECT id, rel_id, read, blob FROM messages WHERE id = ?1", [id])?.pop())
     }
 
     /// The last `limit` messages of a relationship, oldest first.
@@ -326,6 +334,11 @@ mod tests {
         assert_eq!(rels[0].bundle.nickname, "carol");
         assert!(s.message(&rels, n).unwrap().is_none());
         assert_eq!(s.unread(&rels).unwrap()[0].msg.body, "carol says hi");
+
+        // Message numbers are never reused after a shred.
+        let carol = s.relationships().unwrap().pop().unwrap();
+        let next = s.insert_message(&carol, &msg("later", 9), false).unwrap().unwrap();
+        assert!(next > n + 1, "{next} reused an old number");
     }
 
     #[test]

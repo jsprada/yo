@@ -17,7 +17,9 @@ use yo_store::{
 };
 
 use crate::net::{Conn, ServerError, is_code};
-use crate::payload::{AddPayload, Body, ContactSecret, LinkHello, LinkPayload, Payload, SyncEvent, burn_signing_bytes, new_uuid};
+use crate::payload::{
+    AddPayload, Body, ContactSecret, LinkHello, LinkPayload, Payload, SyncEvent, burn_signing_bytes, new_uuid,
+};
 
 /// One-time keys published per relationship, and the refill threshold.
 const PREKEY_BATCH: usize = 20;
@@ -155,8 +157,15 @@ impl Client {
         let hello = postcard::to_stdvec(&LinkHello { device: c.me })?;
         let secret = c.pake_join(Purpose::LinkDevice, nameplate, &code, hello).await?;
         let payload: LinkPayload = postcard::from_bytes(&secret).context("malformed link payload")?;
-        c.create_relationship(RelKind::Myself, "me".into(), Rik::from_secret(&payload.self_rik_secret), None, true, now())
-            .await?;
+        c.create_relationship(
+            RelKind::Myself,
+            "me".into(),
+            Rik::from_secret(&payload.self_rik_secret),
+            None,
+            true,
+            now(),
+        )
+        .await?;
         for cs in &payload.contacts {
             c.join_contact(cs).await?;
         }
@@ -244,7 +253,14 @@ impl Client {
             return Ok(None);
         }
         match self
-            .create_relationship(RelKind::Contact, cs.nickname.clone(), rik, Some(cs.peer_rik), cs.verified, cs.created_at)
+            .create_relationship(
+                RelKind::Contact,
+                cs.nickname.clone(),
+                rik,
+                Some(cs.peer_rik),
+                cs.verified,
+                cs.created_at,
+            )
             .await
         {
             Ok(r) => Ok(Some(r)),
@@ -310,14 +326,14 @@ impl Client {
             rel.bundle.my_list_version = l.version;
             rel.bundle.my_devices = l.devices;
         }
-        if let Some(peer) = rel.bundle.peer_rik {
-            if let Some(l) = self.fetch_list(InboxId::from_rik(&peer), &peer).await? {
-                if l.version < rel.bundle.peer_list_version {
-                    bail!(yo_crypto::CryptoError::Rollback);
-                }
-                rel.bundle.peer_list_version = l.version;
-                rel.bundle.peer_devices = l.devices;
+        if let Some(peer) = rel.bundle.peer_rik
+            && let Some(l) = self.fetch_list(InboxId::from_rik(&peer), &peer).await?
+        {
+            if l.version < rel.bundle.peer_list_version {
+                bail!(yo_crypto::CryptoError::Rollback);
             }
+            rel.bundle.peer_list_version = l.version;
+            rel.bundle.peer_devices = l.devices;
         }
         self.store.update_bundle(rel)?;
         Ok(())
@@ -328,7 +344,12 @@ impl Client {
     /// Encrypt `payload` for every device of the contact (if `to_peer`) and
     /// every other device of mine in this relationship, and hand it to the
     /// server.
-    async fn send_payload(&mut self, rel: &mut Relationship, payload: &Payload, to_peer: bool) -> anyhow::Result<SendReport> {
+    async fn send_payload(
+        &mut self,
+        rel: &mut Relationship,
+        payload: &Payload,
+        to_peer: bool,
+    ) -> anyhow::Result<SendReport> {
         let mut last_err = None;
         for _ in 0..2 {
             match self.try_send(rel, payload, to_peer).await {
@@ -340,16 +361,19 @@ impl Client {
         Err(last_err.expect("loop ran"))
     }
 
-    async fn try_send(&mut self, rel: &mut Relationship, payload: &Payload, to_peer: bool) -> anyhow::Result<SendReport> {
+    async fn try_send(
+        &mut self,
+        rel: &mut Relationship,
+        payload: &Payload,
+        to_peer: bool,
+    ) -> anyhow::Result<SendReport> {
         self.refresh_lists(rel).await?;
         let plaintext = pad::pad(&postcard::to_stdvec(payload)?).ok_or_else(|| anyhow!("message too large"))?;
         let mut olm = self.store.load_olm(rel)?;
 
         let mut targets: Vec<(InboxId, DeviceEntry)> = Vec::new();
-        if to_peer {
-            if let Some(peer_inbox) = rel.bundle.peer_inbox() {
-                targets.extend(rel.bundle.peer_devices.iter().map(|d| (peer_inbox, d.clone())));
-            }
+        if to_peer && let Some(peer_inbox) = rel.bundle.peer_inbox() {
+            targets.extend(rel.bundle.peer_devices.iter().map(|d| (peer_inbox, d.clone())));
         }
         let my_inbox = rel.bundle.my_inbox();
         targets.extend(rel.bundle.my_devices.iter().filter(|d| d.device != self.me).map(|d| (my_inbox, d.clone())));
@@ -390,7 +414,12 @@ impl Client {
     }
 
     /// `yo <name> <message>` and `yo reply`.
-    pub async fn send_text(&mut self, name: &str, text: &str, reply_to: Option<[u8; 16]>) -> anyhow::Result<(i64, SendReport)> {
+    pub async fn send_text(
+        &mut self,
+        name: &str,
+        text: &str,
+        reply_to: Option<[u8; 16]>,
+    ) -> anyhow::Result<(i64, SendReport)> {
         if text.trim().is_empty() {
             bail!("message is empty");
         }
@@ -401,7 +430,8 @@ impl Client {
         if rel.bundle.peer_rik.is_none() {
             bail!("'{name}' has not finished the key exchange");
         }
-        let payload = Payload { uuid: new_uuid(), sent_at: now(), body: Body::Text { text: text.to_string(), reply_to } };
+        let payload =
+            Payload { uuid: new_uuid(), sent_at: now(), body: Body::Text { text: text.to_string(), reply_to } };
         let report = match self.send_payload(&mut rel, &payload, true).await {
             Ok(r) => r,
             Err(e) if is_code(&e, ErrorCode::Burned) => {
@@ -436,7 +466,8 @@ impl Client {
     pub async fn reply(&mut self, number: i64, text: &str) -> anyhow::Result<(String, i64, SendReport)> {
         let rels = self.store.relationships()?;
         let row = self.store.message(&rels, number)?.ok_or_else(|| anyhow!("there is no message #{number}"))?;
-        let rel = rels.iter().find(|r| r.id == row.rel_id).ok_or_else(|| anyhow!("message #{number} has no contact"))?;
+        let rel =
+            rels.iter().find(|r| r.id == row.rel_id).ok_or_else(|| anyhow!("message #{number} has no contact"))?;
         if rel.bundle.kind != RelKind::Contact {
             bail!("message #{number} is a notice from yo!, not from a contact");
         }
@@ -459,20 +490,9 @@ impl Client {
     }
 
     async fn download(&mut self) -> anyhow::Result<()> {
-        loop {
-            let envs = match self.call(Request::Fetch).await? {
-                Response::Envelopes(v) => v,
-                r => bail!("unexpected response {r:?}"),
-            };
-            if envs.is_empty() {
-                return Ok(());
-            }
-            let ids: Vec<u64> = envs.iter().map(|e| e.id).collect();
-            for e in &envs {
-                spool::write(&self.paths, e)?;
-            }
-            self.call(Request::Ack { ids }).await?;
-        }
+        let paths = self.paths.clone();
+        download_to_spool(self.conn().await?, &paths).await?;
+        Ok(())
     }
 
     async fn process_spool(&mut self, report: &mut SyncReport) -> anyhow::Result<()> {
@@ -494,11 +514,11 @@ impl Client {
             for id in active {
                 if let Some(rel) = self.store.relationship(id)? {
                     let inbox = rel.bundle.my_inbox();
-                    if let Ok(Response::KeyCount(n)) = self.call(Request::KeyCount { inbox }).await {
-                        if n < PREKEY_LOW {
-                            let mut olm = self.store.load_olm(&rel)?;
-                            let _ = self.publish_prekeys(&rel, &mut olm, false).await;
-                        }
+                    if let Ok(Response::KeyCount(n)) = self.call(Request::KeyCount { inbox }).await
+                        && n < PREKEY_LOW
+                    {
+                        let mut olm = self.store.load_olm(&rel)?;
+                        let _ = self.publish_prekeys(&rel, &mut olm, false).await;
                     }
                 }
             }
@@ -507,7 +527,11 @@ impl Client {
     }
 
     /// Decrypt and apply one envelope. Returns the relationship it belonged to.
-    async fn process_envelope(&mut self, env: &yo_proto::msg::Envelope, report: &mut SyncReport) -> anyhow::Result<Option<i64>> {
+    async fn process_envelope(
+        &mut self,
+        env: &yo_proto::msg::Envelope,
+        report: &mut SyncReport,
+    ) -> anyhow::Result<Option<i64>> {
         let Some(mut rel) = self.store.relationships()?.into_iter().find(|r| r.bundle.my_inbox() == env.inbox) else {
             return Ok(None); // conversation no longer exists here
         };
@@ -546,9 +570,10 @@ impl Client {
             }
             Body::Burn { inbox, ts, sig } => {
                 let bytes = burn_signing_bytes(&inbox, ts);
-                let by_peer = rel.bundle.peer_rik.is_some_and(|p| {
-                    InboxId::from_rik(&p) == inbox && rik::verify(&p, &bytes, &sig).is_ok()
-                });
+                let by_peer = rel
+                    .bundle
+                    .peer_rik
+                    .is_some_and(|p| InboxId::from_rik(&p) == inbox && rik::verify(&p, &bytes, &sig).is_ok());
                 let mine = rel.bundle.rik().public();
                 let by_me = inbox == rel.bundle.my_inbox() && rik::verify(&mine, &bytes, &sig).is_ok();
                 if by_peer {
@@ -581,7 +606,9 @@ impl Client {
                         }
                     }
                     SyncEvent::Renamed { inbox, nickname } => {
-                        if let Some(mut r) = self.store.relationships()?.into_iter().find(|r| r.bundle.my_inbox() == inbox) {
+                        if let Some(mut r) =
+                            self.store.relationships()?.into_iter().find(|r| r.bundle.my_inbox() == inbox)
+                        {
                             r.bundle.nickname = nickname;
                             self.store.update_bundle(&r)?;
                         }
@@ -720,7 +747,13 @@ impl Client {
         }
     }
 
-    async fn mailbox_wait(&mut self, nameplate: u32, side: Side, index: u32, deadline: tokio::time::Instant) -> anyhow::Result<Vec<u8>> {
+    async fn mailbox_wait(
+        &mut self,
+        nameplate: u32,
+        side: Side,
+        index: u32,
+        deadline: tokio::time::Instant,
+    ) -> anyhow::Result<Vec<u8>> {
         loop {
             if tokio::time::Instant::now() > deadline {
                 let _ = self.call(Request::MailboxClose { nameplate }).await;
@@ -739,7 +772,12 @@ impl Client {
     }
 
     /// Opener side of the PAKE: display the code, then exchange payloads.
-    async fn pake_open(&mut self, purpose: Purpose, on_code: impl FnOnce(&str), mine: Vec<u8>) -> anyhow::Result<Vec<u8>> {
+    async fn pake_open(
+        &mut self,
+        purpose: Purpose,
+        on_code: impl FnOnce(&str),
+        mine: Vec<u8>,
+    ) -> anyhow::Result<Vec<u8>> {
         let nameplate = match self.call(Request::MailboxOpen).await? {
             Response::Nameplate(n) => n,
             r => bail!("unexpected response {r:?}"),
@@ -773,10 +811,18 @@ impl Client {
     }
 
     /// Joiner side of the PAKE.
-    async fn pake_join(&mut self, purpose: Purpose, nameplate: u32, code: &str, mine: Vec<u8>) -> anyhow::Result<Vec<u8>> {
+    async fn pake_join(
+        &mut self,
+        purpose: Purpose,
+        nameplate: u32,
+        code: &str,
+        mine: Vec<u8>,
+    ) -> anyhow::Result<Vec<u8>> {
         match self.call(Request::MailboxJoin { nameplate }).await {
             Ok(_) => {}
-            Err(e) if is_code(&e, ErrorCode::NotFound) => bail!("that code is not valid (expired, mistyped or already used)"),
+            Err(e) if is_code(&e, ErrorCode::NotFound) => {
+                bail!("that code is not valid (expired, mistyped or already used)")
+            }
             Err(e) => return Err(e),
         }
         let deadline = tokio::time::Instant::now() + INVITE_TIMEOUT;
@@ -954,6 +1000,27 @@ impl Client {
         let t = std::time::Instant::now();
         self.call(Request::Ping).await?;
         Ok(t.elapsed())
+    }
+}
+
+/// Fetch every queued envelope into the spool and acknowledge it. Needs no
+/// passphrase: the envelopes stay end-to-end encrypted on disk.
+pub async fn download_to_spool(conn: &mut Conn, paths: &Paths) -> anyhow::Result<usize> {
+    let mut total = 0;
+    loop {
+        let envs = match conn.call(Request::Fetch).await? {
+            Response::Envelopes(v) => v,
+            r => bail!("unexpected response {r:?}"),
+        };
+        if envs.is_empty() {
+            return Ok(total);
+        }
+        let ids: Vec<u64> = envs.iter().map(|e| e.id).collect();
+        for e in &envs {
+            spool::write(paths, e)?;
+        }
+        conn.call(Request::Ack { ids }).await?;
+        total += envs.len();
     }
 }
 

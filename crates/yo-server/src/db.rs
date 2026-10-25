@@ -103,10 +103,9 @@ impl Db {
 
     /// Consume one use of a registration token. Returns false if invalid.
     pub fn use_token(&self, token: &str) -> rusqlite::Result<bool> {
-        let n = self.conn.execute(
-            "UPDATE tokens SET uses_left = uses_left - 1 WHERE token = ?1 AND uses_left > 0",
-            [token],
-        )?;
+        let n = self
+            .conn
+            .execute("UPDATE tokens SET uses_left = uses_left - 1 WHERE token = ?1 AND uses_left > 0", [token])?;
         self.conn.execute("DELETE FROM tokens WHERE uses_left <= 0", [])?;
         Ok(n == 1)
     }
@@ -134,11 +133,9 @@ impl Db {
     pub fn inbox(&self, inbox: &InboxId) -> rusqlite::Result<InboxState> {
         let row: Option<(i64, Option<Vec<u8>>, Option<i64>)> = self
             .conn
-            .query_row(
-                "SELECT version, list, burned_at FROM inboxes WHERE inbox = ?1",
-                [&inbox.0[..]],
-                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
-            )
+            .query_row("SELECT version, list, burned_at FROM inboxes WHERE inbox = ?1", [&inbox.0[..]], |r| {
+                Ok((r.get(0)?, r.get(1)?, r.get(2)?))
+            })
             .optional()?;
         Ok(match row {
             None => InboxState::Missing,
@@ -167,7 +164,10 @@ impl Db {
         };
         tx.execute("DELETE FROM members WHERE inbox = ?1", [inbox])?;
         for d in &signed.list.devices {
-            tx.execute("INSERT OR IGNORE INTO members (inbox, device) VALUES (?1, ?2)", params![inbox, &d.device.0[..]])?;
+            tx.execute(
+                "INSERT OR IGNORE INTO members (inbox, device) VALUES (?1, ?2)",
+                params![inbox, &d.device.0[..]],
+            )?;
         }
         for dev in old {
             if !signed.list.devices.iter().any(|d| d.device.0[..] == dev[..]) {
@@ -327,10 +327,9 @@ impl Db {
 
     pub fn expire(&self, envelopes_before: u64, burned_before: u64) -> rusqlite::Result<usize> {
         let a = self.conn.execute("DELETE FROM envelopes WHERE ts < ?1", [envelopes_before as i64])?;
-        let b = self.conn.execute(
-            "DELETE FROM inboxes WHERE burned_at IS NOT NULL AND burned_at < ?1",
-            [burned_before as i64],
-        )?;
+        let b = self
+            .conn
+            .execute("DELETE FROM inboxes WHERE burned_at IS NOT NULL AND burned_at < ?1", [burned_before as i64])?;
         Ok(a + b)
     }
 

@@ -24,9 +24,7 @@ pub struct FramedConn<S> {
 
 impl<S: AsyncRead + AsyncWrite + Unpin> FramedConn<S> {
     pub fn new(stream: S) -> Self {
-        let codec = LengthDelimitedCodec::builder()
-            .max_frame_length(MAX_FRAME)
-            .new_codec();
+        let codec = LengthDelimitedCodec::builder().max_frame_length(MAX_FRAME).new_codec();
         FramedConn { inner: Framed::new(stream, codec) }
     }
 

@@ -71,9 +71,7 @@ impl Config {
 
     pub fn save(&self, dir: &Path) -> anyhow::Result<()> {
         let body = toml::to_string_pretty(self)?;
-        let text = format!(
-            "# yo-server configuration. See docs/src/server/setup.md for every option.\n{body}"
-        );
+        let text = format!("# yo-server configuration. See docs/src/server/setup.md for every option.\n{body}");
         std::fs::write(dir.join("server.toml"), text)?;
         Ok(())
     }
