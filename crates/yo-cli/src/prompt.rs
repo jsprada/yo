@@ -25,7 +25,7 @@ pub fn snippet(shell: Shell, unread: &Path, with_sync: bool) -> String {
             let f = sh_quote(unread);
             let sync = if with_sync {
                 "\n  # No daemon? Refresh in the background at most once a minute.\n  \
-                 if (( EPOCHSECONDS - ${__YO_LAST:-0} >= 60 )); then __YO_LAST=$EPOCHSECONDS; (yo sync --quiet >/dev/null 2>&1 &); fi"
+                 local now=${EPOCHSECONDS:-$(date +%s)}\n  if (( now - ${__YO_LAST:-0} >= 60 )); then __YO_LAST=$now; (yo sync --quiet >/dev/null 2>&1 &); fi"
             } else {
                 ""
             };
@@ -114,6 +114,7 @@ mod tests {
     use super::*;
 
     #[test]
+    #[cfg(unix)]
     fn bash_snippet_runs() {
         // Smoke-test the bash snippet when bash is available.
         let Ok(out) = std::process::Command::new("bash").arg("--version").output() else { return };

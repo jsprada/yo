@@ -45,7 +45,9 @@ pub type Result<T> = std::result::Result<T, StoreError>;
 /// Write a file readable only by the current user (0600 on Unix), atomically.
 pub fn write_private(path: &std::path::Path, data: &[u8]) -> std::io::Result<()> {
     use std::io::Write;
-    let tmp = path.with_extension("tmp");
+    // Unique temp name: several processes (CLI, daemon) may write at once.
+    let name = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+    let tmp = path.with_file_name(format!(".{name}.{}.tmp", u32::from_le_bytes(yo_crypto::random())));
     {
         let mut opts = std::fs::OpenOptions::new();
         opts.write(true).create(true).truncate(true);

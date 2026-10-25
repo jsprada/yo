@@ -1,6 +1,7 @@
 //! `yo-server`: a relay that stores and forwards end-to-end-encrypted
 //! envelopes. It can authenticate devices (mTLS) but can never read messages.
 
+pub mod cli;
 pub mod config;
 pub mod db;
 pub mod mailbox;

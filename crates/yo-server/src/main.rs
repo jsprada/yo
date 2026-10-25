@@ -1,74 +1,10 @@
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, bail};
-use clap::{Parser, Subcommand};
+use clap::Parser;
+use yo_server::cli::{Cli, Cmd, TokenCmd};
 use yo_server::db::Db;
 use yo_server::{Config, Registration, Server};
-
-/// yo! relay server — stores and forwards end-to-end encrypted messages.
-#[derive(Parser)]
-#[command(name = "yo-server", version, about)]
-struct Cli {
-    /// Data directory (server.toml, certificate, database).
-    #[arg(long, short, env = "YO_SERVER_DIR", global = true)]
-    dir: Option<PathBuf>,
-    #[command(subcommand)]
-    cmd: Cmd,
-}
-
-#[derive(Subcommand)]
-enum Cmd {
-    /// Create server.toml and a self-signed certificate.
-    Init {
-        /// Host name or IP address clients will connect to.
-        #[arg(long)]
-        host: String,
-        /// TCP port to listen on.
-        #[arg(long, default_value_t = yo_proto::DEFAULT_PORT)]
-        port: u16,
-        /// Let any device register (default: registration tokens required).
-        #[arg(long)]
-        open: bool,
-        /// Use an existing CA-issued certificate chain (PEM) instead of a
-        /// self-signed one. Clients then need no pin.
-        #[arg(long, requires = "key")]
-        cert: Option<PathBuf>,
-        /// Private key for --cert (PEM).
-        #[arg(long, requires = "cert")]
-        key: Option<PathBuf>,
-        /// Overwrite an existing configuration.
-        #[arg(long)]
-        force: bool,
-    },
-    /// Run the server.
-    Run,
-    /// Print the command clients use to connect (`yo init ...`).
-    Info,
-    /// Show database statistics.
-    Stats,
-    /// Manage registration tokens.
-    Token {
-        #[command(subcommand)]
-        cmd: TokenCmd,
-    },
-}
-
-#[derive(Subcommand)]
-enum TokenCmd {
-    /// Create a token that lets new devices register.
-    Create {
-        /// How many devices may register with this token.
-        #[arg(long, default_value_t = 1)]
-        uses: u32,
-        /// Free-form note to remember who it is for.
-        #[arg(long, default_value = "")]
-        note: String,
-    },
-    /// List unused tokens.
-    List,
-    /// Delete a token.
-    Revoke { token: String },
-}
 
 fn default_dir() -> PathBuf {
     directories::ProjectDirs::from("", "", "yo-server")

@@ -1,0 +1,76 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  test:
+    name: test (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy, rustfmt
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo fmt --all --check
+        if: matrix.os == 'ubuntu-latest'
+      - run: cargo clippy --workspace --all-targets -- -D warnings
+      - run: cargo test --workspace
+      - run: cargo build --release --workspace
+
+  shells:
+    name: prompt snippets (bash, zsh, fish)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - run: sudo apt-get update && sudo apt-get install -y zsh fish
+      - run: cargo build -p yo-cli
+      - name: snippets show yo!(N) when N > 0 and nothing at 0
+        run: |
+          export YO_HOME=$RUNNER_TEMP/yo && mkdir -p $YO_HOME
+          Y=target/debug/yo
+          for sync in "" "--sync"; do
+            $Y prompt bash $sync > b.sh; $Y prompt zsh $sync > z.zsh; $Y prompt fish $sync > f.fish
+            bash -n b.sh && zsh -n z.zsh && fish -n f.fish
+            echo 5 > $YO_HOME/unread
+            bash --norc -c 'PS1="$ "; source ./b.sh; __yo_prompt; printf "%s" "$__YO"' | grep -q 'yo!(5)'
+            zsh -f -c 'PROMPT="%# "; source ./z.zsh; __yo_prompt; print -r -- "$__YO"' | grep -q 'yo!(5)'
+            fish --no-config -c 'source ./f.fish; fish_right_prompt' | grep -q 'yo!(5)'
+            echo 0 > $YO_HOME/unread
+            ! bash --norc -c 'PS1="$ "; source ./b.sh; __yo_prompt; printf "%s" "$__YO"' | grep -q 'yo!'
+          done
+
+  docs:
+    name: docs
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: install mdBook
+        run: |
+          mkdir -p $HOME/bin
+          curl -sSL https://github.com/rust-lang/mdBook/releases/download/v0.5.4/mdbook-v0.5.4-x86_64-unknown-linux-gnu.tar.gz | tar -xz -C $HOME/bin
+          echo "$HOME/bin" >> $GITHUB_PATH
+      - run: mdbook build docs
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: docs/book
+
+  audit:
+    name: dependency audit
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: rustsec/audit-check@v2
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}

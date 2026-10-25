@@ -2,6 +2,7 @@
 //! terminal interface used by the `yo` binary.
 
 pub mod agent;
+pub mod cli;
 pub mod client;
 pub mod daemon;
 pub mod net;

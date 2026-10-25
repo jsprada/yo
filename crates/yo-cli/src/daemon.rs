@@ -42,6 +42,7 @@ pub async fn run(paths: Paths) -> anyhow::Result<()> {
             r = relay(&paths, &cfg, &state) => r,
             _ = shutdown.notified() => break,
             _ = tokio::signal::ctrl_c() => break,
+            _ = terminate() => break,
             r = &mut agent_task => {
                 let why = match r {
                     Ok(Ok(())) => "stopped".to_string(),
@@ -75,6 +76,19 @@ pub async fn run(paths: Paths) -> anyhow::Result<()> {
     let _ = std::fs::remove_file(paths.agent_socket());
     log("daemon stopped");
     Ok(())
+}
+
+/// Resolves on SIGTERM (e.g. `systemctl --user stop`); never on Windows.
+async fn terminate() {
+    #[cfg(unix)]
+    {
+        use tokio::signal::unix::{SignalKind, signal};
+        if let Ok(mut t) = signal(SignalKind::terminate()) {
+            t.recv().await;
+            return;
+        }
+    }
+    std::future::pending::<()>().await
 }
 
 fn log(msg: &str) {
