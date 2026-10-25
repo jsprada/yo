@@ -30,6 +30,9 @@ PORT=7443
 REPO="https://github.com/jsprada/yo"
 BRANCH="main"
 ADMIN=""
+STATUS_SITE=""
+ACME_EMAIL=""
+STATUS_TLS="acme"
 OPEN_REGISTRATION=0
 AUTO_UPDATE=0
 YES=0
@@ -52,6 +55,9 @@ Usage: install.sh [options]
   --repo URL         git repository (default $REPO)
   --branch NAME      branch to build (default $BRANCH)
   --admin USER       also create a sudo user with your SSH key
+  --status-site DOMAIN   also run the HTTPS status page (yo-status) for DOMAIN
+  --acme-email EMAIL     Let's Encrypt contact for the status page's certificate
+  --status-tls MODE      acme (default) | self-signed (testing)
   --open             open registration (default: tokens required)
   --auto-update      weekly timer that rebuilds yo-server from the branch
   --yes              non-interactive: accept defaults, never prompt
@@ -66,6 +72,9 @@ while [ $# -gt 0 ]; do
     --repo) REPO="$2"; shift 2 ;;
     --branch) BRANCH="$2"; shift 2 ;;
     --admin) ADMIN="$2"; shift 2 ;;
+    --status-site) STATUS_SITE="$2"; shift 2 ;;
+    --acme-email) ACME_EMAIL="$2"; shift 2 ;;
+    --status-tls) STATUS_TLS="$2"; shift 2 ;;
     --open) OPEN_REGISTRATION=1; shift ;;
     --auto-update) AUTO_UPDATE=1; shift ;;
     --yes) YES=1; shift ;;
@@ -234,6 +243,8 @@ ok "at $(git -C "$SRC_DIR" rev-parse --short HEAD) ($(git -C "$SRC_DIR" log -1 -
 
 # ── 4. build ──────────────────────────────────────────────────────────────────
 log "Building yo-server (a few minutes on a small VPS)"
+export YO_GIT_SHA
+YO_GIT_SHA="$(git -C "$SRC_DIR" rev-parse --short HEAD)"
 ( cd "$SRC_DIR" && cargo build --release -p yo-server -q )
 if [ -f "$BIN" ] && ! cmp -s "$SRC_DIR/target/release/yo-server" "$BIN"; then
   cp -p "$BIN" "$BIN.prev"
@@ -252,6 +263,16 @@ if [ ! -f "$DATA_DIR/server.toml" ]; then
   ok "initialized for $HOST (certificate, pin, server.toml)"
 else
   ok "server.toml exists; leaving it alone"
+fi
+# Local status socket (for yo-status); harmless when nothing reads it. It is
+# a top-level key, so it must go *before* the [limits] table.
+if ! grep -q '^status_socket' "$DATA_DIR/server.toml"; then
+  if grep -q '^\[limits\]' "$DATA_DIR/server.toml"; then
+    sed -i '/^\[limits\]/i status_socket = "\/run\/yo-server\/status.sock"   # read by the yo-status page\n' "$DATA_DIR/server.toml"
+  else
+    printf 'status_socket = "/run/yo-server/status.sock"   # read by the yo-status page\n' >> "$DATA_DIR/server.toml"
+  fi
+  "$BIN" --dir "$DATA_DIR" info >/dev/null || die "server.toml failed to parse after adding status_socket"
 fi
 chmod 600 "$DATA_DIR/server.key" 2>/dev/null || true
 chown -R yo:yo "$DATA_DIR"
@@ -273,6 +294,8 @@ ExecStart=$BIN --dir $DATA_DIR run
 Restart=on-failure
 RestartSec=5
 Environment=RUST_LOG=info
+RuntimeDirectory=yo-server
+RuntimeDirectoryMode=0750
 
 NoNewPrivileges=true
 ProtectSystem=strict
@@ -325,6 +348,7 @@ table inet filter {
     ip6 nexthdr icmpv6 accept
 
     tcp dport { $ssh_ports } accept
+$( [ -n "$STATUS_SITE" ] && printf '\n    # status page (HTTPS)\n    tcp dport 443 ct state new limit rate over 60/minute burst 120 packets drop\n    tcp dport 443 accept\n' )
 
     # yo!: an address opening more than 30 new connections/min is dropped
     tcp dport $PORT ct state new limit rate over 30/minute burst 60 packets drop
@@ -337,7 +361,7 @@ EOF
 nft -c -f /etc/nftables.conf || die "nftables rules failed validation"
 nft -f /etc/nftables.conf
 systemctl enable -q --now nftables
-ok "open ports: ssh ($ssh_ports), yo ($PORT); everything else dropped"
+ok "open ports: ssh ($ssh_ports), yo ($PORT)${STATUS_SITE:+, https (443)}; everything else dropped"
 
 # ── 7b. fail2ban ──────────────────────────────────────────────────────────────
 log "fail2ban"
@@ -471,6 +495,84 @@ systemctl enable -q --now yo-server-backup.timer
 /usr/local/sbin/yo-server-backup
 ok "nightly backup to $BACKUP_DIR at 03:00 (14 days kept); first one taken"
 
+# ── 11b. status page (optional) ──────────────────────────────────────────────
+if [ -n "$STATUS_SITE" ]; then
+  log "Status page for https://$STATUS_SITE"
+  case "$STATUS_TLS" in
+    acme) [ -n "$ACME_EMAIL" ] || ACME_EMAIL="$(ask "Contact e-mail for Let's Encrypt" "")"
+          [ -n "$ACME_EMAIL" ] || die "--acme-email is required for Let's Encrypt" ;;
+    self-signed) ;;
+    *) die "--status-tls must be acme or self-signed" ;;
+  esac
+  ( cd "$SRC_DIR" && cargo build --release -p yo-status -q )
+  install -m 0755 -o root -g root "$SRC_DIR/target/release/yo-status" /usr/local/bin/yo-status
+  if ! id yo-status >/dev/null 2>&1; then
+    useradd --system --no-create-home --shell /usr/sbin/nologin -g yo yo-status
+  fi
+  install -d -m 0755 /etc/yo-status
+  if [ "$STATUS_TLS" = "acme" ]; then
+    tls_block="$(printf '[tls]\nmode = "acme"\ndomains = ["%s"]\nemail = "%s"\ncache_dir = "/var/lib/yo-status/acme"\nproduction = true\n' "$STATUS_SITE" "$ACME_EMAIL")"
+  else
+    tls_block="$(printf '[tls]\nmode = "self-signed"\ndomains = ["%s"]\n' "$STATUS_SITE")"
+  fi
+  cat > /etc/yo-status/config.toml <<EOF
+$MARKER
+listen = "[::]:443"
+status_socket = "/run/yo-server/status.sock"
+maintenance_file = "/run/yo-server-maintenance"
+poll_seconds = 60
+server_address = "$HOST:$PORT"
+github = "https://github.com/jsprada/yo"
+
+$tls_block
+EOF
+  /usr/local/bin/yo-status --config /etc/yo-status/config.toml --check >/dev/null
+  cat > /etc/systemd/system/yo-status.service <<EOF
+$MARKER
+[Unit]
+Description=yo! status page (HTTPS)
+Documentation=https://github.com/jsprada/yo
+After=network-online.target yo-server.service
+Wants=network-online.target
+
+[Service]
+User=yo-status
+Group=yo
+ExecStart=/usr/local/bin/yo-status --config /etc/yo-status/config.toml
+Restart=on-failure
+RestartSec=5
+Environment=RUST_LOG=info
+StateDirectory=yo-status
+StateDirectoryMode=0700
+
+AmbientCapabilities=CAP_NET_BIND_SERVICE
+CapabilityBoundingSet=CAP_NET_BIND_SERVICE
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+RestrictNamespaces=true
+LockPersonality=true
+MemoryDenyWriteExecute=true
+SystemCallArchitectures=native
+
+[Install]
+WantedBy=multi-user.target
+EOF
+  systemctl daemon-reload
+  systemctl enable -q yo-status
+  systemctl restart yo-server   # picks up the status socket setting
+  systemctl restart yo-status
+  sleep 2
+  systemctl is-active -q yo-status || { journalctl -u yo-status -n 20 --no-pager; die "yo-status failed to start"; }
+  ok "yo-status running on 443 (${STATUS_TLS})"
+fi
+
 # ── 12. updater + settings ────────────────────────────────────────────────────
 log "Updater"
 install -m 0755 "$SRC_DIR/deploy/update.sh" "$UPDATE_BIN"
@@ -484,6 +586,7 @@ BIN="$BIN"
 HOST="$HOST"
 PORT="$PORT"
 GIT_SSH_COMMAND="$GIT_SSH"
+STATUS_SITE="$STATUS_SITE"
 EOF
 chmod 0600 "$CONF_DIR/install.conf"
 ok "$UPDATE_BIN installed; settings in $CONF_DIR/install.conf"
@@ -519,6 +622,7 @@ fi
 echo
 log "Done. Summary"
 systemctl --no-pager --quiet is-active yo-server && ok "yo-server: active, listening on [::]:$PORT"
+[ -n "$STATUS_SITE" ] && systemctl --no-pager --quiet is-active yo-status && ok "yo-status: active, https://$STATUS_SITE/"
 ok "firewall: nftables + fail2ban; time: chrony; OS updates: unattended (reboot 04:30 if needed)"
 echo
 runuser -u yo -- "$BIN" --dir "$DATA_DIR" info

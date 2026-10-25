@@ -82,6 +82,7 @@ mdbook serve docs        # http://localhost:3000
 | `crates/yo-store` | encrypted local storage |
 | `crates/yo-cli` | the `yo` client (engine, agent, daemon, CLI) |
 | `crates/yo-server` | the `yo-server` relay |
+| `crates/yo-status` | optional read-only HTTPS status page for a server |
 
 ```sh
 cargo test --workspace   # unit tests + end-to-end tests against a real server

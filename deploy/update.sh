@@ -21,6 +21,12 @@ CONF=/etc/yo-server/install.conf
 export GIT_SSH_COMMAND="${GIT_SSH_COMMAND:-}"
 export PATH="/root/.cargo/bin:$PATH"
 export DEBIAN_FRONTEND=noninteractive
+STATUS_SITE="${STATUS_SITE:-}"
+MAINT=/run/yo-server-maintenance
+# The status page shows yellow while this file exists.
+maintenance_on()  { : > "$MAINT"; }
+maintenance_off() { rm -f "$MAINT"; }
+trap maintenance_off EXIT
 
 DO_SERVER=1; DO_OS=1; CHECK=0; TEST=0; YES=0
 while [ $# -gt 0 ]; do
@@ -78,28 +84,45 @@ update_server() {
   git -C "$SRC_DIR" checkout -q "$BRANCH"
   git -C "$SRC_DIR" pull -q --ff-only origin "$BRANCH"
   log "building ($(git -C "$SRC_DIR" rev-parse --short HEAD))"
+  export YO_GIT_SHA
+  YO_GIT_SHA="$(git -C "$SRC_DIR" rev-parse --short HEAD)"
   ( cd "$SRC_DIR" && cargo build --release -p yo-server -q )
+  [ -n "$STATUS_SITE" ] && ( cd "$SRC_DIR" && cargo build --release -p yo-status -q )
   if [ "$TEST" -eq 1 ]; then
     log "running the server test suite"
     ( cd "$SRC_DIR" && cargo test --release -p yo-server -q ) || die "tests failed; not installing"
   fi
+  if [ -n "$STATUS_SITE" ] && ! cmp -s "$SRC_DIR/target/release/yo-status" /usr/local/bin/yo-status; then
+    install -m 0755 -o root -g root "$SRC_DIR/target/release/yo-status" /usr/local/bin/yo-status
+    systemctl restart yo-status
+    ok "yo-status updated: $(/usr/local/bin/yo-status --version)"
+  fi
   if cmp -s "$SRC_DIR/target/release/yo-server" "$BIN"; then
-    ok "binary unchanged; no restart needed"
+    ok "yo-server binary unchanged; no restart needed"
     return 0
   fi
 
   cp -p "$BIN" "$BIN.prev"
   install -m 0755 -o root -g root "$SRC_DIR/target/release/yo-server" "$BIN"
   log "restarting yo-server"
+  maintenance_on
   systemctl restart yo-server
   if healthy; then
+    maintenance_off
     ok "yo-server updated: $("$BIN" --version) — $(git -C "$SRC_DIR" log -1 --format='%h %s' | cut -c1-70)"
   else
     warn "new binary did not come up; rolling back"
     journalctl -u yo-server -n 20 --no-pager || true
     install -m 0755 "$BIN.prev" "$BIN"
     systemctl restart yo-server
-    healthy && warn "previous version restored" || warn "previous version also failing — investigate now"
+    if healthy; then
+      maintenance_off
+      warn "previous version restored"
+    else
+      # Leave the marker: the page shows yellow, not red, while you look.
+      warn "previous version also failing — investigate now"
+      trap - EXIT
+    fi
     exit 1
   fi
 }

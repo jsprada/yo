@@ -6,6 +6,19 @@ All notable changes to yo! are recorded here. The format follows
 
 ## [Unreleased]
 
+### Added (status page)
+
+- `yo-status`: an optional read-only HTTPS page for a server — what yo! is,
+  a link to the source, a green/yellow/red LED, the deployed version (with
+  git SHA), uptime and last-check time. It polls `yo-server` once a minute
+  over a new local Unix status socket (`status_socket` in `server.toml`;
+  answers one JSON line, reads nothing) and serves from memory. GET-only, no
+  JavaScript, strict CSP. Let's Encrypt via TLS-ALPN-01 on 443 (no port 80),
+  or own certificate / self-signed. `install.sh --status-site DOMAIN`;
+  `yo-server-update` sets a maintenance marker around restarts (yellow).
+- `yo-server --version` and the status page include the git SHA the binary
+  was built from when built by the deploy scripts.
+
 ### Added (deployment)
 
 - `deploy/install.sh`: one-shot, re-runnable installer for Debian 12/13 —

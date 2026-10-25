@@ -7,6 +7,7 @@ pub mod db;
 pub mod mailbox;
 pub mod pool;
 pub mod server;
+pub mod status;
 
 use std::path::Path;
 use std::sync::Arc;

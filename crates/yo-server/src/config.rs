@@ -83,6 +83,11 @@ pub struct Config {
     pub max_devices: usize,
     #[serde(default)]
     pub limits: Limits,
+    /// Unix socket on which the server answers a one-line JSON status
+    /// (version, protocol, start time) for a local status page. Nothing is
+    /// read from it. Off when unset.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub status_socket: Option<PathBuf>,
 }
 
 fn yes() -> bool {
@@ -107,6 +112,7 @@ impl Config {
             message_ttl_days: 30,
             max_devices: 16,
             limits: Limits::default(),
+            status_socket: None,
         }
     }
 

@@ -38,6 +38,9 @@ Options:
 | `--repo URL`, `--branch NAME` | what to build (default `github.com/jsprada/yo`, `main`) |
 | `--admin USER` | also create a sudo user and copy root's SSH key to it |
 | `--open` | open registration instead of tokens |
+| `--status-site DOMAIN` | also run the HTTPS status page on 443 (see the Status page doc) |
+| `--acme-email EMAIL` | Let's Encrypt contact for that page's certificate |
+| `--status-tls MODE` | `acme` (default) or `self-signed` (testing) |
 | `--auto-update` | weekly timer that rebuilds `yo-server` from the branch |
 | `--yes` | never prompt (accept defaults; refuses steps that need a human) |
 
@@ -50,6 +53,12 @@ upgrades for security *and* regular updates with an automatic reboot at
 04:30 when needed; SSH key-only login (**only if** an authorized key already
 exists, so it cannot lock you out); the nightly backup; and
 `/usr/local/sbin/yo-server-update`.
+
+With `--status-site`, it also builds and starts `yo-status`, a read-only
+HTTPS page (green/yellow/red LED, deployed version, link to the source) that
+learns the server's state over a local socket — see
+`docs/src/server/status-page.md`. Port 443 is then the third and last open
+port.
 
 It ends by printing the `yo init …` line for clients and the three things it
 can't do for you: back up the server identity off the box, add the same

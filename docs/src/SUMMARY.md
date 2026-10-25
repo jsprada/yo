@@ -8,6 +8,7 @@
 - [Server setup](server/setup.md)
 - [First deployment checklist](server/deploy.md)
 - [Deployment runbook (every command)](server/runbook.md)
+- [Status page](server/status-page.md)
 
 # Using yo!
 

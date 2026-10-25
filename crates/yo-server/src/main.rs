@@ -85,7 +85,20 @@ async fn main() -> anyhow::Result<()> {
                 .context("opening database")?;
             let listener =
                 tokio::net::TcpListener::bind(&cfg.listen).await.with_context(|| format!("binding {}", cfg.listen))?;
-            tracing::info!("yo-server listening on {} (registration: {:?})", cfg.listen, cfg.registration);
+            tracing::info!(
+                "yo-server {} listening on {} (registration: {:?})",
+                yo_server::status::version_string(),
+                cfg.listen,
+                cfg.registration
+            );
+            if let Some(sock) = cfg.status_socket.clone() {
+                let started = yo_proto::now();
+                tokio::spawn(async move {
+                    if let Err(e) = yo_server::status::serve(&sock, started).await {
+                        tracing::warn!("status socket {}: {e}", sock.display());
+                    }
+                });
+            }
             if let Some(p) = yo_server::pin(&dir, &cfg)? {
                 tracing::info!("certificate pin: {p}");
             }
