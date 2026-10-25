@@ -3068,6 +3068,8 @@ dependencies = [
  "thiserror",
  "tokio",
  "tokio-rustls",
+ "tracing",
+ "tracing-subscriber",
  "yo-crypto",
  "yo-proto",
  "yo-server",

@@ -935,8 +935,14 @@ impl Client {
                 bail!("the invite code expired before the other person used it");
             }
             match self.call(Request::MailboxGet { nameplate, side, index }).await {
-                Ok(Response::MailboxMsg(Some(m))) => return Ok(m),
-                Ok(Response::MailboxMsg(None)) => continue,
+                Ok(Response::MailboxMsg(Some(m))) => {
+                    tracing::debug!(nameplate, ?side, index, "mailbox: got message");
+                    return Ok(m);
+                }
+                Ok(Response::MailboxMsg(None)) => {
+                    tracing::debug!(nameplate, ?side, index, "mailbox: still waiting");
+                    continue;
+                }
                 Ok(r) => bail!("unexpected response {r:?}"),
                 Err(e) if is_code(&e, ErrorCode::NotFound) => {
                     bail!("the exchange was aborted — the code was wrong or already used. Start again with a new code")
@@ -966,12 +972,15 @@ impl Client {
             Purpose::LinkDevice => (invite::LINK_CODE_WORDS, LINK_TIMEOUT),
         };
         let code = invite::new_code_with(nameplate, words);
+        tracing::debug!(nameplate, ?purpose, "exchange: opened");
         on_code(&code);
         let deadline = tokio::time::Instant::now() + ttl;
         let (pake, m0) = invite::start(&code, purpose);
         self.call(Request::MailboxPut { nameplate, side: Side::Opener, msg: m0 }).await?;
+        tracing::debug!(nameplate, "exchange: opener put message 0");
         let theirs0 = self.mailbox_wait(nameplate, Side::Opener, 0, deadline).await?;
         let theirs1 = self.mailbox_wait(nameplate, Side::Opener, 1, deadline).await?;
+        tracing::debug!(nameplate, "exchange: opener has both joiner messages");
         let checked = pake.finish(&theirs0).and_then(|keys| {
             if theirs1.len() < 32 {
                 return Err(yo_crypto::CryptoError::CodeMismatch);
@@ -1015,8 +1024,10 @@ impl Client {
         let ttl = if purpose == Purpose::LinkDevice { LINK_TIMEOUT } else { INVITE_TIMEOUT };
         let deadline = tokio::time::Instant::now() + ttl;
         let (pake, m) = invite::start(code, purpose);
+        tracing::debug!(nameplate, ?purpose, "exchange: joined");
         let theirs0 = self.mailbox_wait(nameplate, Side::Joiner, 0, deadline).await?;
         self.call(Request::MailboxPut { nameplate, side: Side::Joiner, msg: m }).await?;
+        tracing::debug!(nameplate, "exchange: joiner put message 0");
         let keys = pake.finish(&theirs0).map_err(|_| anyhow!("key exchange failed"))?;
         let mut msg = keys.confirm(Side::Joiner).to_vec();
         msg.extend(keys.seal(Side::Joiner, &mine));

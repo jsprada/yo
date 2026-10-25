@@ -26,6 +26,34 @@ pub fn is_code(e: &anyhow::Error, code: ErrorCode) -> bool {
     e.downcast_ref::<ServerError>().is_some_and(|s| s.code == code)
 }
 
+/// Upper bound on one request/response round trip.
+const CALL_TIMEOUT: Duration = Duration::from_secs(90);
+
+/// The variant name, for logs and errors (never the payload).
+fn request_name(req: &Request) -> &'static str {
+    match req {
+        Request::Hello { .. } => "Hello",
+        Request::PutDeviceList(_) => "PutDeviceList",
+        Request::GetDeviceList { .. } => "GetDeviceList",
+        Request::PublishKeys { .. } => "PublishKeys",
+        Request::KeyCount { .. } => "KeyCount",
+        Request::ClaimKey { .. } => "ClaimKey",
+        Request::Send { .. } => "Send",
+        Request::Fetch => "Fetch",
+        Request::Ack { .. } => "Ack",
+        Request::Subscribe => "Subscribe",
+        Request::DeleteInbox(_) => "DeleteInbox",
+        Request::MailboxOpen => "MailboxOpen",
+        Request::MailboxJoin { .. } => "MailboxJoin",
+        Request::MailboxPut { .. } => "MailboxPut",
+        Request::MailboxGet { .. } => "MailboxGet",
+        Request::MailboxClose { .. } => "MailboxClose",
+        Request::Ping => "Ping",
+        Request::BindRevocation(_) => "BindRevocation",
+        Request::Deregister(_) => "Deregister",
+    }
+}
+
 pub struct Conn {
     framed: FramedConn<TlsStream<TcpStream>>,
     events: VecDeque<Envelope>,
@@ -99,18 +127,37 @@ impl Conn {
         if self.in_flight {
             return Err(anyhow!("connection out of sync after a cancelled request"));
         }
+        let name = request_name(&req);
+        let started = std::time::Instant::now();
         self.in_flight = true;
         self.framed.send(&req).await?;
-        loop {
-            let frame = self.framed.recv::<ServerFrame>().await?;
-            match frame {
-                ServerFrame::Event(Event::Envelope(e)) => self.events.push_back(e),
-                ServerFrame::Response(r) => {
-                    self.in_flight = false;
-                    return match r {
-                        Response::Error { code, message } => Err(ServerError { code, message }.into()),
-                        r => Ok(r),
-                    };
+        // The longest legitimate wait is a mailbox long-poll (25 s on the
+        // server); anything beyond this is a stalled connection, which must
+        // surface as an error rather than hang the command.
+        let result = tokio::time::timeout(CALL_TIMEOUT, async {
+            loop {
+                let frame = self.framed.recv::<ServerFrame>().await?;
+                match frame {
+                    ServerFrame::Event(Event::Envelope(e)) => self.events.push_back(e),
+                    ServerFrame::Response(r) => return Ok::<_, anyhow::Error>(r),
+                }
+            }
+        })
+        .await;
+        tracing::debug!(
+            request = name,
+            ms = started.elapsed().as_millis() as u64,
+            ok = result.as_ref().map(|r| r.is_ok()).unwrap_or(false),
+            "call"
+        );
+        match result {
+            Err(_) => Err(anyhow!("no reply from the server to {name} within {}s", CALL_TIMEOUT.as_secs())),
+            Ok(Err(e)) => Err(e),
+            Ok(Ok(r)) => {
+                self.in_flight = false;
+                match r {
+                    Response::Error { code, message } => Err(ServerError { code, message }.into()),
+                    r => Ok(r),
                 }
             }
         }

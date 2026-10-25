@@ -17,7 +17,20 @@ struct TestServer {
     _dir: tempfile::TempDir,
 }
 
+/// Debug logs from both the server and the client, shown only when a test
+/// fails (cargo captures them), so a stalled exchange is diagnosable.
+fn init_tracing() {
+    let _ = tracing_subscriber::fmt()
+        .with_env_filter(
+            tracing_subscriber::EnvFilter::try_from_default_env()
+                .unwrap_or_else(|_| "yo_server=debug,yo_cli=debug".into()),
+        )
+        .with_test_writer()
+        .try_init();
+}
+
 async fn start_server(registration: Registration) -> TestServer {
+    init_tracing();
     let dir = tempfile::tempdir().unwrap();
     let (cert, key) = tls::generate_cert(vec!["localhost".into()]).unwrap();
     let chain = tls::load_chain(cert.as_bytes()).unwrap();

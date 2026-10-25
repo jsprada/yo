@@ -484,7 +484,9 @@ impl Server {
                 if !self.allow(&me, "mailbox-io", 240) {
                     return err(ErrorCode::RateLimited, "slow down");
                 }
-                match self.mailboxes.lock().expect("mailbox lock").put(nameplate, me, side, msg) {
+                let r = self.mailboxes.lock().expect("mailbox lock").put(nameplate, me, side, msg);
+                debug!(nameplate, ?side, device = %me.short(), ok = r.is_ok(), "mailbox put");
+                match r {
                     Ok(()) => Response::Ok,
                     Err(MailboxError::TooLarge) => err(ErrorCode::BadRequest, "mailbox message too large"),
                     Err(MailboxError::Unauthorized) => err(ErrorCode::Unauthorized, "not a participant of this invite"),
@@ -506,6 +508,7 @@ impl Server {
                         Err(_) => return err(ErrorCode::NotFound, "invite closed"),
                     };
                     if msg.is_some() {
+                        debug!(nameplate, ?side, index, device = %me.short(), "mailbox get: delivered");
                         return Response::MailboxMsg(msg);
                     }
                     // Register for wake-ups *before* re-checking: a `Notified`
@@ -521,6 +524,7 @@ impl Server {
                         return Response::MailboxMsg(Some(m));
                     }
                     if tokio::time::timeout_at(deadline, notified).await.is_err() {
+                        debug!(nameplate, ?side, index, device = %me.short(), "mailbox get: long-poll timed out");
                         return Response::MailboxMsg(None);
                     }
                 }

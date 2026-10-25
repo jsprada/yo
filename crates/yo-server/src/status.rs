@@ -7,9 +7,6 @@
 use std::path::Path;
 
 use serde::Serialize;
-use tokio::io::AsyncWriteExt;
-use tokio::net::UnixListener;
-use tracing::{info, warn};
 use yo_proto::{PROTOCOL_VERSION, now};
 
 /// "0.1.0 (a2012fc)" when built by the deploy scripts, else "0.1.0".
@@ -31,7 +28,20 @@ pub struct Status {
     pub now: u64,
 }
 
+/// Unix sockets only exist on Unix; the server itself is Linux-only, but
+/// the crate is compiled on other platforms as a test dependency of the
+/// client, so keep the socket code behind `cfg(unix)`.
+#[cfg(not(unix))]
+pub async fn serve(_path: &Path, _started_at: u64) -> std::io::Result<()> {
+    Err(std::io::Error::other("the status socket is only available on Unix"))
+}
+
+#[cfg(unix)]
 pub async fn serve(path: &Path, started_at: u64) -> std::io::Result<()> {
+    use tokio::io::AsyncWriteExt;
+    use tokio::net::UnixListener;
+    use tracing::{info, warn};
+
     let _ = std::fs::remove_file(path);
     let listener = UnixListener::bind(path)?;
     {
