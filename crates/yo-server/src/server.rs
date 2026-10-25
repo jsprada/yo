@@ -508,8 +508,13 @@ impl Server {
                     if msg.is_some() {
                         return Response::MailboxMsg(msg);
                     }
+                    // Register for wake-ups *before* re-checking: a `Notified`
+                    // only listens once enabled (or first polled), so without
+                    // this a write landing between the check and the await
+                    // would be missed until the long-poll timed out.
                     let notified = notify.notified();
-                    // Re-check after registering interest to avoid a lost wakeup.
+                    tokio::pin!(notified);
+                    notified.as_mut().enable();
                     if let Ok((Some(m), _)) =
                         self.mailboxes.lock().expect("mailbox lock").get(nameplate, me, side, index)
                     {

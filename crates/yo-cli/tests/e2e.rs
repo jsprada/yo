@@ -59,9 +59,13 @@ async fn befriend(a: &mut Client, a_calls_b: &str, b: &mut Client, b_calls_a: &s
         let code = rx.await.unwrap();
         b.add_join(b_calls_a, &code).await
     };
-    let (ra, rb) = tokio::join!(opener, joiner);
+    let (ra, rb) = tokio::time::timeout(std::time::Duration::from_secs(120), async { tokio::join!(opener, joiner) })
+        .await
+        .expect("key exchange did not finish within 120 s");
+    if let Err(e) = &rb {
+        panic!("joiner failed: {e:#} (opener: {:?})", ra.as_ref().err().map(|e| format!("{e:#}")));
+    }
     ra.unwrap();
-    rb.unwrap();
 }
 
 async fn unread_bodies(c: &mut Client) -> Vec<String> {
