@@ -182,7 +182,7 @@ Build on the box so the binary matches its C library.
 ```sh
 $ curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
 $ . "$HOME/.cargo/env"
-$ git clone https://github.com/jsprada/yo ~/yo        # private repo: use ssh://git@github.com/jsprada/yo
+$ git clone https://github.com/jsprada/yo ~/yo
 $ cd ~/yo && cargo build --release -p yo-server       # ~5 minutes on 1 vCPU
 $ sudo install -m 0755 target/release/yo-server /usr/local/bin/yo-server
 $ yo-server --version
@@ -191,8 +191,8 @@ $ yo-server --version
 ### Service user and data directory
 
 ```sh
-# useradd --system --home /var/lib/yo-server --create-home --shell /usr/sbin/nologin yo
-# chmod 700 /var/lib/yo-server
+# useradd --system --home /var/lib/yo-server --no-create-home --shell /usr/sbin/nologin yo
+# install -d -m 0700 -o yo -g yo /var/lib/yo-server
 ```
 
 ### Initialize
@@ -330,9 +330,24 @@ gzip -f "$out"
 find /var/backups/yo-server -name '*.db.gz' -mtime +14 -delete
 EOF
 # chmod 0755 /usr/local/sbin/yo-server-backup
-# cat > /etc/cron.d/yo-server-backup <<'EOF'
-0 3 * * * root /usr/local/sbin/yo-server-backup
+# cat > /etc/systemd/system/yo-server-backup.service <<'EOF'
+[Unit]
+Description=Nightly yo-server database backup
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/yo-server-backup
 EOF
+# cat > /etc/systemd/system/yo-server-backup.timer <<'EOF'
+[Unit]
+Description=Nightly yo-server database backup
+[Timer]
+OnCalendar=*-*-* 03:00:00
+RandomizedDelaySec=15m
+Persistent=true
+[Install]
+WantedBy=timers.target
+EOF
+# systemctl daemon-reload && systemctl enable --now yo-server-backup.timer
 # /usr/local/sbin/yo-server-backup && ls -la /var/backups/yo-server/
 ```
 
@@ -364,7 +379,7 @@ Send each person this **one line**, over a channel you already trust (in
 person, a phone call, an app you consider private):
 
 ```text
-cargo install --git ssh://git@github.com/jsprada/yo yo-cli && \
+cargo install --git https://github.com/jsprada/yo yo-cli && \
 yo init --server yo.example.com:7443 --pin sha256:uavoahcy… --token vil2sobn3s3hozvk22au3is3bq
 ```
 
@@ -375,7 +390,7 @@ server.
 ## 9. Each client (the recipient runs this)
 
 ```sh
-$ cargo install --git ssh://git@github.com/jsprada/yo yo-cli      # needs Rust 1.85+
+$ cargo install --git https://github.com/jsprada/yo yo-cli    # needs Rust 1.85+
 $ yo init --server yo.example.com:7443 --pin sha256:… --token …   # choose a passphrase
 $ yo status                                                       # network: ok
 $ yo daemon install                                               # notifier + passphrase cache, starts at login
@@ -442,4 +457,4 @@ locked out: each client adds the new pin under `extra_pins` in `config.toml`
 | Tokens | `sudo -u yo yo-server --dir /var/lib/yo-server token …` |
 | Client command line to hand out | `sudo -u yo yo-server --dir /var/lib/yo-server info` |
 | Bans | `fail2ban-client status yo-server` |
-| Backups | `/var/backups/yo-server/` (nightly 03:00) |
+| Backups | `/var/backups/yo-server/` (timer, nightly 03:00) |

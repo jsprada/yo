@@ -152,7 +152,7 @@ Do this with one other person, or with your laptop and a second machine.
       `yo init --server yo.example.com:7443 --pin sha256:… --token …`
       The pin is what stops a look-alike server; treat it like the token.
 - [ ] Each person installs the client with one command
-      (`cargo install --git ssh://git@github.com/jsprada/yo yo-cli`; see
+      (`cargo install --git https://github.com/jsprada/yo yo-cli`; see
       [Install](../client/install.md)) and runs that line. They pick a
       passphrase. `yo status` should show `network: ok`.
 - [ ] Each person: `yo daemon install`, then `yo prompt bash >> ~/.bashrc`

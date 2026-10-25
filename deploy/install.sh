@@ -138,7 +138,7 @@ fi
 # ── 1. packages ───────────────────────────────────────────────────────────────
 log "Installing prerequisites"
 need=()
-for p in build-essential pkg-config git curl ca-certificates chrony fail2ban python3-systemd \
+for p in build-essential pkg-config git curl ca-certificates sudo chrony fail2ban python3-systemd \
          nftables unattended-upgrades sqlite3 gnupg; do
   dpkg -s "$p" >/dev/null 2>&1 || need+=("$p")
 done
@@ -162,7 +162,7 @@ ok "$(rustc --version)"
 # ── 2. service user ───────────────────────────────────────────────────────────
 log "Service user"
 if ! id yo >/dev/null 2>&1; then
-  useradd --system --home "$DATA_DIR" --create-home --shell /usr/sbin/nologin yo
+  useradd --system --home "$DATA_DIR" --no-create-home --shell /usr/sbin/nologin yo
   ok "created user yo"
 else
   ok "user yo exists"
@@ -215,10 +215,21 @@ clone_or_update() {
   fi
 }
 
-if ! clone_or_update 2>/dev/null; then
-  setup_deploy_key
-  clone_or_update || die "could not clone $REPO"
+git_err="$(mktemp)"
+if ! clone_or_update 2>"$git_err"; then
+  cat "$git_err" >&2
+  case "$REPO" in
+    https://github.com/*)
+      if grep -qiE "authentication failed|could not read Username|repository not found|terminal prompts disabled" "$git_err"; then
+        setup_deploy_key
+        clone_or_update || die "could not clone $REPO (see the error above)"
+      else
+        die "could not clone $REPO (see the error above)"
+      fi ;;
+    *) die "could not clone $REPO (see the error above)" ;;
+  esac
 fi
+rm -f "$git_err"
 ok "at $(git -C "$SRC_DIR" rev-parse --short HEAD) ($(git -C "$SRC_DIR" log -1 --format=%s | cut -c1-60))"
 
 # ── 4. build ──────────────────────────────────────────────────────────────────
@@ -235,7 +246,7 @@ log "Server configuration"
 if [ ! -f "$DATA_DIR/server.toml" ]; then
   args=(--host "$HOST" --port "$PORT")
   [ "$OPEN_REGISTRATION" -eq 1 ] && args+=(--open)
-  sudo -u yo "$BIN" --dir "$DATA_DIR" init "${args[@]}" >/dev/null
+  runuser -u yo -- "$BIN" --dir "$DATA_DIR" init "${args[@]}" >/dev/null
   # Dual-stack listen; the server canonicalises IPv4-mapped addresses.
   sed -i "s/^listen = .*/listen = \"[::]:$PORT\"/" "$DATA_DIR/server.toml"
   ok "initialized for $HOST (certificate, pin, server.toml)"
@@ -436,12 +447,29 @@ gzip -f "\$out"
 find $BACKUP_DIR -name '*.db.gz' -mtime +14 -delete
 EOF
 chmod 0755 /usr/local/sbin/yo-server-backup
-cat > /etc/cron.d/yo-server-backup <<EOF
+cat > /etc/systemd/system/yo-server-backup.service <<EOF
 $MARKER
-0 3 * * * root /usr/local/sbin/yo-server-backup
+[Unit]
+Description=Nightly yo-server database backup
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/yo-server-backup
 EOF
+cat > /etc/systemd/system/yo-server-backup.timer <<EOF
+$MARKER
+[Unit]
+Description=Nightly yo-server database backup
+[Timer]
+OnCalendar=*-*-* 03:00:00
+RandomizedDelaySec=15m
+Persistent=true
+[Install]
+WantedBy=timers.target
+EOF
+systemctl daemon-reload
+systemctl enable -q --now yo-server-backup.timer
 /usr/local/sbin/yo-server-backup
-ok "nightly backup to $BACKUP_DIR (14 days kept); first one taken"
+ok "nightly backup to $BACKUP_DIR at 03:00 (14 days kept); first one taken"
 
 # ── 12. updater + settings ────────────────────────────────────────────────────
 log "Updater"
@@ -493,7 +521,7 @@ log "Done. Summary"
 systemctl --no-pager --quiet is-active yo-server && ok "yo-server: active, listening on [::]:$PORT"
 ok "firewall: nftables + fail2ban; time: chrony; OS updates: unattended (reboot 04:30 if needed)"
 echo
-sudo -u yo "$BIN" --dir "$DATA_DIR" info
+runuser -u yo -- "$BIN" --dir "$DATA_DIR" info
 cat <<EOF
 
 Next steps
