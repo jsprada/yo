@@ -7,6 +7,9 @@ contents, contact names, or anyone's real identity**, so you can run it on a
 cheap VPS without having to trust the host with your conversations. See
 [Security model](../reference/security.md) for exactly what it can see.
 
+> Deploying for the first time? The [first deployment checklist](deploy.md)
+> puts these steps in order and says what to have in place around the server.
+
 ## Requirements
 
 - A Linux machine with a public IP or DNS name. (The server is only

@@ -6,6 +6,12 @@ All notable changes to yo! are recorded here. The format follows
 
 ## [Unreleased]
 
+### Docs
+
+- First deployment checklist (`docs/src/server/deploy.md`): recommended
+  infrastructure, ordered steps for the box, the service, backups, the first
+  two clients, day-one verification and a symptom table.
+
 ### Security
 
 Phase 3 of the remediation plan in `SECURITY_REVIEW.md`; details and

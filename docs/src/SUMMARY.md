@@ -6,6 +6,7 @@
 # Running a server
 
 - [Server setup](server/setup.md)
+- [First deployment checklist](server/deploy.md)
 
 # Using yo!
 
