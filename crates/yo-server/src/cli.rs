@@ -6,7 +6,7 @@ use clap::{Parser, Subcommand};
 
 /// yo! relay server — stores and forwards end-to-end encrypted messages.
 #[derive(Parser)]
-#[command(name = "yo-server", version, about)]
+#[command(name = "yo-server", version = Box::leak(crate::status::version_string().into_boxed_str()) as &'static str, about)]
 pub struct Cli {
     /// Data directory (server.toml, certificate, database).
     #[arg(long, short, env = "YO_SERVER_DIR", global = true)]

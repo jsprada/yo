@@ -255,6 +255,8 @@ ExecStart=/usr/local/bin/yo-server --dir /var/lib/yo-server run
 Restart=on-failure
 RestartSec=5
 Environment=RUST_LOG=info
+RuntimeDirectory=yo-server
+RuntimeDirectoryMode=0750
 
 # Hardening
 NoNewPrivileges=true
@@ -266,7 +268,7 @@ PrivateDevices=true
 ProtectKernelTunables=true
 ProtectKernelModules=true
 ProtectControlGroups=true
-RestrictAddressFamilies=AF_INET AF_INET6
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
 RestrictNamespaces=true
 LockPersonality=true
 MemoryDenyWriteExecute=true
