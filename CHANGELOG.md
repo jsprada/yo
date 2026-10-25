@@ -6,6 +6,16 @@ All notable changes to yo! are recorded here. The format follows
 
 ## [Unreleased]
 
+### Added (deployment)
+
+- `deploy/install.sh`: one-shot, re-runnable installer for Debian 12/13 —
+  prerequisites, Rust, service user, clone (deploy key for private repos),
+  build, init, hardened systemd unit, nftables, fail2ban, chrony, unattended
+  OS upgrades with auto-reboot, safe SSH hardening, backups, and the updater.
+- `deploy/update.sh` (installed as `yo-server-update`): rebuilds from the
+  branch with automatic rollback if the new binary fails to start; `--check`,
+  `--server`, `--os`, `--test`; optional weekly timer.
+
 ### Docs
 
 - `DEPLOYMENT.md`: a copy-paste runbook with every command and config file

@@ -18,6 +18,66 @@ Conventions: `#` prompts run as root (or `sudo -i`), `$` as `ADMIN`,
 
 ---
 
+## 0. The fast path: `deploy/install.sh`
+
+Everything in sections 2–9 below is automated by one script, which is safe to
+re-run and asks only for what it can't work out. From your laptop:
+
+```sh
+scp deploy/install.sh root@yo.example.com:
+ssh root@yo.example.com
+# install.sh --host yo.example.com --admin ADMIN
+```
+
+Options:
+
+| Flag | |
+|---|---|
+| `--host NAME` | DNS name clients connect to (prompted if omitted) |
+| `--port N` | listen port (default 7443) |
+| `--repo URL`, `--branch NAME` | what to build (default `github.com/jsprada/yo`, `main`) |
+| `--admin USER` | also create a sudo user and copy root's SSH key to it |
+| `--open` | open registration instead of tokens |
+| `--auto-update` | weekly timer that rebuilds `yo-server` from the branch |
+| `--yes` | never prompt (accept defaults; refuses steps that need a human) |
+
+What it sets up, checking each piece first so re-runs are no-ops: packages
+and Rust; the `yo` user; a clone of the repository (for a **private** repo it
+generates a read-only deploy key, prints it, and waits while you add it on
+GitHub); the release build; `yo-server init`; the hardened systemd unit;
+nftables (SSH + the port only, rate-limited), fail2ban, chrony; unattended OS
+upgrades for security *and* regular updates with an automatic reboot at
+04:30 when needed; SSH key-only login (**only if** an authorized key already
+exists, so it cannot lock you out); the nightly backup; and
+`/usr/local/sbin/yo-server-update`.
+
+It ends by printing the `yo init …` line for clients and the three things it
+can't do for you: back up the server identity off the box, add the same
+ports to your provider's firewall, and create tokens.
+
+### Updating later: `yo-server-update`
+
+```sh
+# yo-server-update            # rebuild yo-server if the branch moved, restart, then OS packages
+# yo-server-update --check    # report what would change
+# yo-server-update --server   # yo-server only;  --os for packages only
+# yo-server-update --test     # run the server test suite before installing
+```
+
+It shows the new commits before building, installs only if the binary
+actually changed, and if the new binary doesn't come up within ten seconds it
+restores the previous one and restarts. The OS part runs
+`apt full-upgrade` + `autoremove` and tells you if a reboot is pending (the
+unattended-upgrades reboot window will take care of it otherwise).
+
+`--auto-update` at install time (or `systemctl enable --now
+yo-server-update.timer` later) runs the server part every Sunday at 04:00.
+Leave it off if you'd rather review commits before they go live; OS packages
+update unattended either way.
+
+The sections below are the same steps by hand, for reference and for
+anything you want to do differently.
+
 ## 1. DNS (do this first; it takes time to propagate)
 
 At your DNS provider:
