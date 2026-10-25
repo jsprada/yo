@@ -31,8 +31,8 @@ Status is one of *Open*, *Fixed*, *Mitigated* (risk reduced, residual noted),
 
 ## 1. Phase 1 — before internet exposure (2026-10-25)
 
-Commit: `<pending>` (filled in after the commit lands; see git history for
-"Phase 1 remediation").
+Commit: `0eebd81` ("Phase 1 remediation: server abuse limits, bound mailboxes,
+output sanitizing").
 
 Plan items 1.1–1.6 of the review, plus one new finding (M-6) discovered
 while implementing them. All verification tests live in
