@@ -7,6 +7,7 @@
 use std::path::Path;
 
 use serde::Serialize;
+#[cfg(unix)]
 use yo_proto::{PROTOCOL_VERSION, now};
 
 /// "0.1.0 (a2012fc)" when built by the deploy scripts, else "0.1.0".
