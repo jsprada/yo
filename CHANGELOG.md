@@ -8,6 +8,8 @@ All notable changes to yo! are recorded here. The format follows
 
 ### Docs
 
+- `DEPLOYMENT.md`: a copy-paste runbook with every command and config file
+  (nftables, systemd unit, fail2ban, backups, tokens, client setup).
 - First deployment checklist (`docs/src/server/deploy.md`): recommended
   infrastructure, ordered steps for the box, the service, backups, the first
   two clients, day-one verification and a symptom table.

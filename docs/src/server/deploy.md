@@ -1,5 +1,8 @@
 # First deployment checklist
 
+> Want just the commands? [`DEPLOYMENT.md`](runbook.md) is the runbook with
+> every command and config file inline.
+
 A step-by-step for putting the first real `yo-server` on the internet for a
 small, trusted group (you plus a handful of people), and getting two clients
 talking through it. It assumes the [Server setup](setup.md) page for the
