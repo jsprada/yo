@@ -396,7 +396,7 @@ cannot be done in-tree.
 
 ## 4. Phase 4 — L-3 completion (2026-10-26)
 
-Commit: `<pending>` ("L-3: conversation re-keying"; see git history).
+Commit: `ca992b0` ("L-3: conversation re-keying; yo rekey; deregistered sessions dropped").
 
 ### 4.1 L-3: Conversation re-keying
 
