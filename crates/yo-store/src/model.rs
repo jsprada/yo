@@ -35,6 +35,10 @@ pub struct Bundle {
     /// Cached, already-verified device lists.
     pub my_devices: Vec<DeviceEntry>,
     pub peer_devices: Vec<DeviceEntry>,
+    /// When this device's current Olm fallback key for the relationship was
+    /// generated; rotated by the client (SECURITY_REVIEW.md, M-3).
+    #[serde(default)]
+    pub fallback_at: u64,
 }
 
 impl Drop for Bundle {

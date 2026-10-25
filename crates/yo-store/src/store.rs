@@ -283,6 +283,7 @@ mod tests {
             peer_list_version: 0,
             my_devices: vec![],
             peer_devices: vec![],
+            fallback_at: 0,
         }
     }
 

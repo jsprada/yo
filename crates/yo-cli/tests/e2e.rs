@@ -5,6 +5,7 @@ use std::path::{Path, PathBuf};
 use yo_cli::client::{Client, InitOptions};
 use yo_crypto::kdf::KdfParams;
 use yo_proto::tls;
+use yo_server::DbPool;
 use yo_server::db::Db;
 use yo_server::{Config, Registration, Server};
 use yo_store::{Direction, MessageKind, Paths};
@@ -23,12 +24,12 @@ async fn start_server(registration: Registration) -> TestServer {
     let pin = tls::format_pin(&tls::spki_hash(&chain[0]).unwrap());
     let tls_cfg = std::sync::Arc::new(tls::server_config(chain, tls::load_key(key.as_bytes()).unwrap()).unwrap());
     let db_path = dir.path().join("server.db");
-    let db = Db::open(&db_path).unwrap();
     let mut cfg = Config::new("localhost".into(), 0);
     cfg.registration = registration;
     if registration == Registration::Token {
-        db.create_token("letmein", 1, "test", 0).unwrap();
+        Db::open(&db_path).unwrap().create_token("letmein", 1, "test", 0).unwrap();
     }
+    let db = DbPool::open(&db_path, 2).unwrap();
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap().to_string();
     let server = Server::new(db, &cfg);
@@ -123,10 +124,10 @@ async fn full_lifecycle() {
     let (tx, rx) = tokio::sync::oneshot::channel::<String>();
     let a2_home = homes[2].path().to_path_buf();
     let a2_opts = opts(&server, None);
-    let linker = alice.link_open(move |code| tx.send(code.to_string()).unwrap());
+    let linker = alice.link_open(move |code| tx.send(code.to_string()).unwrap(), |_| true);
     let new_dev = async move {
         let code = rx.await.unwrap();
-        Client::init_linked(Paths::at(&a2_home), a2_opts, &code).await
+        Client::init_linked(Paths::at(&a2_home), a2_opts, &code, |_| {}).await
     };
     let (linked_id, alice2) = tokio::join!(linker, new_dev);
     let mut alice2 = alice2.unwrap();

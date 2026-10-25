@@ -5,12 +5,14 @@ pub mod cli;
 pub mod config;
 pub mod db;
 pub mod mailbox;
+pub mod pool;
 pub mod server;
 
 use std::path::Path;
 use std::sync::Arc;
 
 pub use config::{Config, Registration};
+pub use pool::DbPool;
 pub use server::Server;
 
 /// Build the rustls server config from the files named in `cfg`.

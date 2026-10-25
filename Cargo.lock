@@ -2528,6 +2528,7 @@ dependencies = [
  "rusqlite",
  "rustls",
  "serde",
+ "tempfile",
  "tokio",
  "tokio-rustls",
  "toml",

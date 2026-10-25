@@ -75,11 +75,13 @@ Permanently destroy a conversation on both sides. → [Burn](../client/burn.md)
 
 ### `yo link`
 
-Show a code for setting up another device of yours.
+Show a code for setting up another device of yours. The new device shows its
+id and you approve it before any secret is sent. → [Devices](../client/devices.md)
 
 | Option | |
 |---|---|
 | `--qr` | Also show the code as a QR code. |
+| `--yes` | Don't ask before sending your account to the device that joins. |
 
 ### `yo devices`
 

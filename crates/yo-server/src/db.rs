@@ -74,6 +74,7 @@ fn enc<T: serde::Serialize>(v: &T) -> Vec<u8> {
 impl Db {
     pub fn open(path: &Path) -> rusqlite::Result<Db> {
         let conn = Connection::open(path)?;
+        conn.busy_timeout(std::time::Duration::from_secs(5))?;
         conn.execute_batch(SCHEMA)?;
         Ok(Db { conn })
     }
@@ -101,13 +102,23 @@ impl Db {
         Ok(())
     }
 
-    /// Consume one use of a registration token. Returns false if invalid.
-    pub fn use_token(&self, token: &str) -> rusqlite::Result<bool> {
-        let n = self
-            .conn
-            .execute("UPDATE tokens SET uses_left = uses_left - 1 WHERE token = ?1 AND uses_left > 0", [token])?;
-        self.conn.execute("DELETE FROM tokens WHERE uses_left <= 0", [])?;
-        Ok(n == 1)
+    /// Register `device` by consuming one use of `token`, atomically: if the
+    /// registration can't be stored, the token is not consumed. Returns
+    /// false (and changes nothing) when the token is invalid or used up.
+    pub fn register_with_token(&mut self, device: &DeviceId, token: &str, now: u64) -> rusqlite::Result<bool> {
+        let tx = self.conn.transaction()?;
+        let n =
+            tx.execute("UPDATE tokens SET uses_left = uses_left - 1 WHERE token = ?1 AND uses_left > 0", [token])?;
+        if n != 1 {
+            return Ok(false);
+        }
+        tx.execute(
+            "INSERT OR IGNORE INTO registered (device, registered_at) VALUES (?1, ?2)",
+            params![&device.0[..], now as i64],
+        )?;
+        tx.execute("DELETE FROM tokens WHERE uses_left <= 0", [])?;
+        tx.commit()?;
+        Ok(true)
     }
 
     pub fn create_token(&self, token: &str, uses: u32, note: &str, now: u64) -> rusqlite::Result<()> {
@@ -364,5 +375,26 @@ impl Db {
             ("queued envelopes", c("SELECT COUNT(*) FROM envelopes")?),
             ("one-time keys", c("SELECT COUNT(*) FROM prekeys")?),
         ])
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn token_registration_is_atomic_and_single_use() {
+        let mut db = Db::open_in_memory().unwrap();
+        let a = DeviceId([1; 16]);
+        let b = DeviceId([2; 16]);
+        db.create_token("t1", 1, "", 0).unwrap();
+        assert!(!db.register_with_token(&a, "nope", 1).unwrap(), "bad token changes nothing");
+        assert!(!db.is_registered(&a).unwrap());
+        assert_eq!(db.list_tokens().unwrap().len(), 1, "token untouched after a bad attempt");
+        assert!(db.register_with_token(&a, "t1", 1).unwrap());
+        assert!(db.is_registered(&a).unwrap());
+        assert!(db.list_tokens().unwrap().is_empty(), "used-up token is deleted");
+        assert!(!db.register_with_token(&b, "t1", 2).unwrap());
+        assert!(!db.is_registered(&b).unwrap());
     }
 }

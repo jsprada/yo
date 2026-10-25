@@ -69,6 +69,11 @@ impl Paths {
     pub fn spool(&self) -> PathBuf {
         self.data_dir.join("spool")
     }
+    /// My inbox ids, one per line, so the daemon can tell real envelopes from
+    /// junk without the passphrase. (Inbox ids are already known to the server.)
+    pub fn inbox_index(&self) -> PathBuf {
+        self.data_dir.join("inboxes")
+    }
     pub fn lock(&self) -> PathBuf {
         self.data_dir.join("yo.lock")
     }

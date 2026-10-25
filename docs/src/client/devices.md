@@ -25,18 +25,32 @@ server needs one for new devices):
 
 ```console
 $ yo init --server yo.example.com:7443 --pin sha256:… --link 71502-twirl-ozone-rust
-✔ yo! is ready on this device (eh67hc3n)
-✔ linked — 3 contact(s) copied from your other device
+ This device is eh67hc3n. Your other device will ask you to approve it.
 ```
 
-The new device picks its own passphrase. Passphrases are per device.
+The existing device then asks you to confirm, showing the same id:
+
+```console
+ Device eh67hc3n wants to link. It should show the same id. Send it your account? [y/N] y
+✔ linked device eh67hc3n
+```
+
+Check the two ids match before you answer `y`. This is the moment that
+authorizes handing over your account, so a code seen by someone else is not
+enough on its own — they would also have to be approved here. The new device
+then finishes and picks its own passphrase (passphrases are per device). Use
+`yo link --yes` to skip the prompt (for scripts).
+
+Because a link code carries your whole account, it has four words instead of
+three and lives for five minutes instead of ten.
 
 What happens:
 
 1. The two devices run the same SPAKE2 exchange used for
    [adding contacts](contacts.md), with the code as the password.
-2. The old device sends, encrypted with the exchanged key, the identity keys
-   of your device-sync conversation and of each contact conversation.
+2. After you approve the new device's id, the old device sends, encrypted
+   with the exchanged key, the identity keys of your device-sync conversation
+   and of each contact conversation.
 3. The new device makes its **own** encryption keys for each conversation,
    adds itself to each conversation's signed device list, and publishes its
    one-time keys.

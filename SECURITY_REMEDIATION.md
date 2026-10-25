@@ -16,16 +16,16 @@ Status is one of *Open*, *Fixed*, *Mitigated* (risk reduced, residual noted),
 | H-1 | Resource exhaustion on the server | High | **Fixed** | 2026-10-25 | [§1.1](#11-h-1-resource-exhaustion-on-the-server) |
 | M-1 | Invite mailboxes not bound to participants | Medium | **Fixed** | 2026-10-25 | [§1.2](#12-m-1-invite-mailboxes-are-not-bound-to-their-participants) |
 | M-2 | Terminal control sequences in messages | Medium | **Fixed** | 2026-10-25 | [§1.3](#13-m-2-terminal-control-sequences-in-messages) |
-| M-3 | Fallback key never rotated | Medium | Open (Phase 2) | | |
-| M-4 | `yo link` hands over the account on the code alone | Medium | Open (Phase 2) | | |
-| M-5 | Registration-token attempts not rate-limited | Medium | Open (Phase 2) | | |
+| M-3 | Fallback key never rotated | Medium | **Fixed** | 2026-10-26 | [§2.1](#21-m-3-fallback-key-rotation) |
+| M-4 | `yo link` hands over the account on the code alone | Medium | **Fixed** | 2026-10-26 | [§2.2](#22-m-4-yo-link-confirmation) |
+| M-5 | Registration-token attempts not rate-limited | Medium | **Fixed** | 2026-10-26 | [§2.3](#23-m-5-registration-throttling-and-atomic-token-use) |
 | M-6 | *(new)* Large backlogs exceeded the frame limit and stalled delivery | Medium | **Fixed** | 2026-10-25 | [§1.4](#14-m-6-new-fetch-responses-could-exceed-the-frame-limit) |
-| L-1 | Device lists may name devices that never joined | Low | Open (Phase 2) | | |
-| L-2 | Serialized database access | Low | Open (Phase 2) | | |
+| L-1 | Device lists may name devices that never joined | Low | **Fixed** | 2026-10-26 | [§2.4](#24-l-1-device-lists-must-name-registered-devices) |
+| L-2 | Serialized database access | Low | **Fixed** | 2026-10-26 | [§2.5](#25-l-2-database-off-the-async-runtime) |
 | L-3 | Removed devices keep conversation keys | Low | Open (Phase 3) | | |
 | L-4 | Draft written to disk in the clear | Low | Open (Phase 3) | | |
 | L-5 | Sender-controlled timestamps | Low | Open (Phase 3) | | |
-| L-6 | Undecryptable envelopes count as unread | Low | Open (Phase 2) | | |
+| L-6 | Undecryptable envelopes count as unread | Low | **Fixed** | 2026-10-26 | [§2.6](#26-l-6-unread-counter-ignores-unknown-inboxes) |
 | L-7 | Service installers don't escape paths | Low | Open (Phase 3) | | |
 | I-1 | Informational items | Info | Open (Phase 3) | | |
 
@@ -168,9 +168,111 @@ suite exercises chunked sends to multi-device contacts.
 protection"): built-in limits table, fail2ban filter and jail, nftables
 rate rule, and the `[limits]` reference in §4.
 
-## 2. Phase 2 — next release
+## 2. Phase 2 (2026-10-26)
 
-Not started. Items: M-3, M-4, M-5, L-1, L-2, L-6 (see the review's plan).
+Commit: `<pending>` ("Phase 2 remediation"; see git history). Plan items
+2.1–2.6 of the review. Verification tests are in `crates/yo-cli/tests/limits.rs`
+(Phase 2 section) and the crates' unit tests, and run in CI on every push.
+
+### 2.1 M-3: Fallback key rotation
+
+**Status: Fixed.**
+
+**Change.** A `fallback_at` timestamp was added to each relationship bundle
+(`yo-store`, `#[serde(default)]` so old stores load). `Client::rotate_fallback`
+publishes a fresh batch of one-time keys *and* a new fallback key and stamps
+the time; `rotate_fallback_keys(older_than)` does this for every relationship
+past an age. A successful `yo sync`/`yo read` rotates keys older than 7 days
+(`FALLBACK_ROTATE_SECS`); when one-time keys are found low during spool
+processing, the fallback is rotated too unless it is under a day old
+(`FALLBACK_ROTATE_WHEN_LOW_SECS`). vodozemac keeps the *previous* fallback key
+after a rotation, so a session opened against the key just retired still
+decrypts; two rotations retire it for good.
+
+**Verification.** `fallback_key_rotation_keeps_one_previous_key`: a message
+sent using alice's fallback key decrypts after one rotation; the session keeps
+working after further rotations; a message whose prekey used a fallback key
+that has since been rotated out twice no longer decrypts (grace period ended).
+
+**Residual.** The window is bounded by rotation cadence, not wall-clock, so a
+device that never comes online to rotate keeps an old fallback key usable.
+Acceptable: such a device is also not receiving new one-time keys.
+
+### 2.2 M-4: `yo link` confirmation
+
+**Status: Fixed.**
+
+**Change.** `pake_open` gained a `confirm` callback that is shown the other
+side's decrypted payload *before* the opener's own payload is sent, and
+aborts (closing the mailbox) if it returns false. `link_open` passes a
+callback that decodes the joiner's `LinkHello` and asks the caller to approve
+its device id; `yo link` prints the id and reads a `y/N` answer (or `--yes`).
+The new device prints its own id on start so the two can be compared. Link
+codes now use four words (`LINK_CODE_WORDS`, ~41 bits) and a five-minute
+timeout (`LINK_TIMEOUT`); `parse_code` accepts three- or four-word codes.
+
+**Verification.** `linking_needs_the_existing_devices_approval`: a declining
+confirmation makes the opener abort with "cancelled", the new device gets
+nothing, and the device count stays 1; also asserts link codes have four
+words. The e2e linking test passes an approving callback.
+
+**Residual.** `--yes` restores the old one-factor behaviour for scripts;
+documented. A stolen *and* approved device is M-4-out-of-scope (that is L-3).
+
+### 2.3 M-5: Registration throttling and atomic token use
+
+**Status: Fixed.**
+
+**Change.** `Db::use_token` + separate `register` were replaced by
+`Db::register_with_token`, a single transaction that decrements the token and
+inserts the registration together, so a failure consumes nothing. The server
+tracks failed registrations per source IP in a one-minute window
+(`failed_registrations_per_minute_per_ip`, default 5) and returns
+`RateLimited` past the limit, before touching the database.
+
+**Verification.** `failed_registrations_are_throttled_per_ip`: the third bad
+attempt in a window is `RateLimited`, and a *valid* token is also made to wait
+out the window; `db::tests::token_registration_is_atomic_and_single_use`: a
+bad token leaves the token list untouched and the device unregistered.
+
+### 2.4 L-1: Device lists must name registered devices
+
+**Status: Fixed.** `Server::put_list` now checks every entry of a submitted
+device list against the `registered` table and rejects the list with
+`BadRequest` if any device is unknown. Combined with the mTLS-derived device
+id, this means an inbox can only ever list real devices of this server.
+
+**Verification.** `device_lists_may_only_name_registered_devices`: a list
+containing an unregistered key is refused; the same list with only registered
+keys is accepted.
+
+### 2.5 L-2: Database off the async runtime
+
+**Status: Fixed.** A `DbPool` (`crates/yo-server/src/pool.rs`) holds several
+SQLite connections (WAL mode, 5 s busy timeout) and runs each operation on a
+`spawn_blocking` thread. Every `Server` database call goes through it, so a
+slow query occupies one connection and one blocking thread instead of blocking
+the runtime or every other request. `db_connections` (default 4) is
+configurable.
+
+**Verification.** `pool::tests::queries_run_in_parallel_off_the_runtime`: 8
+blocking queries over 4 connections finish in roughly 2×, not 8×, their
+duration, and the async runtime stays responsive throughout.
+
+### 2.6 L-6: Unread counter ignores unknown inboxes
+
+**Status: Fixed.** The client writes a small plaintext index of its own inbox
+ids (`Paths::inbox_index`; inbox ids are already known to the server, so this
+leaks nothing new) whenever its relationships change. `spool::incoming_count`
+counts only spooled envelopes from other devices whose inbox is in that index,
+so junk queued to a device for an inbox it doesn't have no longer inflates the
+prompt's `yo!(N)`. With no index yet, every envelope counts (old behaviour).
+
+**Verification.** `unread_counter_ignores_envelopes_for_unknown_inboxes`: an
+envelope sent (by a non-member) to a device for an unknown inbox leaves the
+counter at 0, a real message raises it to 1, and the junk is dropped silently
+on `yo read` without a user-visible "undecryptable" notice beyond the normal
+drop handling.
 
 ## 3. Phase 3 — hardening
 

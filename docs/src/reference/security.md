@@ -148,7 +148,10 @@ in front of yo!, and run your own server.
 Olm's Double Ratchet gives forward secrecy (a stolen device can't decrypt
 messages from before its keys were rotated) and post-compromise recovery
 (sessions heal once a compromised attacker loses access). Burning adds
-deliberate destruction on top.
+deliberate destruction on top. The Olm fallback key — used to open a session
+when a device's one-time keys are exhausted — is rotated by the client (after
+a week, or sooner once keys run low), with the previous key kept for one more
+period so in-flight session setups still decrypt.
 
 ## Known limitations
 

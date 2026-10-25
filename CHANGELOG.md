@@ -8,7 +8,26 @@ All notable changes to yo! are recorded here. The format follows
 
 ### Security
 
-Phase 1 of the remediation plan in `SECURITY_REVIEW.md`; details and
+Phase 2 of the remediation plan in `SECURITY_REVIEW.md`; details and
+verification in `SECURITY_REMEDIATION.md`.
+
+- **M-3** The Olm fallback key is rotated (after a week, or sooner when
+  one-time keys run low), keeping the previous key for one more period so
+  in-flight session openings still decrypt.
+- **M-4** `yo link` now shows the joining device's id and requires approval
+  on the existing device before any account secret is sent (`--yes` to skip).
+  Link codes have four words (~41 bits) and expire in five minutes.
+- **M-5** Failed registration attempts are throttled per IP, and a token is
+  consumed in the same transaction that registers the device, so a failure
+  can't burn a token.
+- **L-1** The server accepts a device list only if every device in it is
+  registered, so nobody can queue envelopes for a stranger's device.
+- **L-2** All server database work runs on a pool of connections off the
+  async runtime, so a slow query no longer stalls other connections.
+- **L-6** The unread counter ignores spooled envelopes addressed to inboxes
+  this device doesn't have (the daemon reads a small plaintext inbox index).
+
+### Earlier — Phase 1 of the remediation plan in `SECURITY_REVIEW.md`; details and
 verification in `SECURITY_REMEDIATION.md`.
 
 - **H-1** Server abuse limits, configurable in a new `[limits]` table of

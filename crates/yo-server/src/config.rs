@@ -35,6 +35,11 @@ pub struct Limits {
     pub sends_per_minute: u32,
     /// Invite mailboxes that may exist at once, server-wide.
     pub mailboxes: usize,
+    /// Failed registration attempts (bad or missing token) per minute from
+    /// one IP address before further attempts are refused.
+    pub failed_registrations_per_minute_per_ip: u32,
+    /// SQLite connections in the pool.
+    pub db_connections: usize,
 }
 
 impl Default for Limits {
@@ -47,6 +52,8 @@ impl Default for Limits {
             send_mib_per_hour_per_device: 256,
             sends_per_minute: 120,
             mailboxes: 2000,
+            failed_registrations_per_minute_per_ip: 5,
+            db_connections: 4,
         }
     }
 }

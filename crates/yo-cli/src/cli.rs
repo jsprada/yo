@@ -89,6 +89,9 @@ pub enum Cmd {
         /// Also show the code as a QR code.
         #[arg(long)]
         qr: bool,
+        /// Don't ask before sending your account to the device that joins.
+        #[arg(long)]
+        yes: bool,
     },
     /// List (or remove) your devices.
     Devices {

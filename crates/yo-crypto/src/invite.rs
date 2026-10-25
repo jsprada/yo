@@ -32,12 +32,20 @@ impl Purpose {
     }
 }
 
+/// Words in a contact-invite code (~31 bits).
 pub const CODE_WORDS: usize = 3;
+/// Words in a device-link code (~41 bits): the code moves account secrets,
+/// so it gets more entropy and a shorter life (SECURITY_REVIEW.md, M-4).
+pub const LINK_CODE_WORDS: usize = 4;
 
 /// Build a code string for a nameplate with fresh random words.
 pub fn new_code(nameplate: u32) -> String {
+    new_code_with(nameplate, CODE_WORDS)
+}
+
+pub fn new_code_with(nameplate: u32, words: usize) -> String {
     let mut parts = vec![nameplate.to_string()];
-    for _ in 0..CODE_WORDS {
+    for _ in 0..words {
         // Rejection sampling for an unbiased index into 1296 words.
         let idx = loop {
             let r = u16::from_le_bytes(crate::random::<2>()) as usize;
@@ -55,7 +63,7 @@ pub fn new_code(nameplate: u32) -> String {
 pub fn parse_code(input: &str) -> Result<(u32, String), CryptoError> {
     let lower = input.trim().to_ascii_lowercase();
     let parts: Vec<&str> = lower.split(|c: char| c == '-' || c.is_whitespace()).filter(|p| !p.is_empty()).collect();
-    if parts.len() != 1 + CODE_WORDS {
+    if parts.len() < 1 + CODE_WORDS || parts.len() > 1 + LINK_CODE_WORDS {
         return Err(CryptoError::BadCode);
     }
     let nameplate: u32 = parts[0].parse().map_err(|_| CryptoError::BadCode)?;
@@ -138,6 +146,10 @@ mod tests {
         assert_eq!(n, 42);
         assert_eq!(norm, c);
         assert!(parse_code("42-notaword-acorn-acid").is_err());
+        let link = new_code_with(7, LINK_CODE_WORDS);
+        assert_eq!(link.matches('-').count(), LINK_CODE_WORDS);
+        assert_eq!(parse_code(&link).unwrap().1, link);
+        assert!(parse_code("42-acorn-acid-acre-aged-ajar").is_err(), "five words is too many");
         assert!(parse_code("42-acorn").is_err());
         assert!(parse_code("x-acorn-acid-acre").is_err());
     }

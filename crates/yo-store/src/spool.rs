@@ -4,8 +4,10 @@
 //! envelopes are still end-to-end encrypted, so the spool is safe at rest.
 //! `yo read` (or any unlocked command) drains it into the database.
 
+use std::collections::HashSet;
 use std::path::PathBuf;
 
+use yo_proto::InboxId;
 use yo_proto::msg::Envelope;
 
 use crate::paths::Paths;
@@ -48,11 +50,26 @@ pub fn list(paths: &Paths) -> std::io::Result<Vec<(PathBuf, Envelope)>> {
     Ok(out)
 }
 
-/// Spooled envelopes that came from other people.
+/// Record which inboxes belong to this device (see `Paths::inbox_index`).
+pub fn write_inbox_index(paths: &Paths, inboxes: &[InboxId]) -> std::io::Result<()> {
+    let text: String = inboxes.iter().map(|i| format!("{i}\n")).collect();
+    crate::write_private(&paths.inbox_index(), text.as_bytes())
+}
+
+/// `None` when no index has been written yet (then every envelope counts).
+pub fn read_inbox_index(paths: &Paths) -> Option<HashSet<InboxId>> {
+    let text = std::fs::read_to_string(paths.inbox_index()).ok()?;
+    Some(text.lines().filter_map(|l| l.trim().parse().ok()).collect())
+}
+
+/// Spooled envelopes that came from other people, for inboxes this device
+/// actually has (junk for unknown inboxes is not counted; SECURITY_REVIEW.md L-6).
 pub fn incoming_count(paths: &Paths) -> u64 {
-    std::fs::read_dir(paths.spool())
-        .map(|rd| {
-            rd.filter_map(|e| e.ok()).filter(|e| e.file_name().to_string_lossy().ends_with(".o.env")).count() as u64
+    let known = read_inbox_index(paths);
+    list(paths)
+        .map(|envs| {
+            envs.iter().filter(|(_, e)| !e.from_member && known.as_ref().is_none_or(|k| k.contains(&e.inbox))).count()
+                as u64
         })
         .unwrap_or(0)
 }

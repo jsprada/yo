@@ -81,7 +81,8 @@ async fn main() -> anyhow::Result<()> {
                 .init();
             let cfg = Config::load(&dir)?;
             let tls = yo_server::tls_config(&dir, &cfg)?;
-            let db = open_db(&dir)?;
+            let db = yo_server::DbPool::open(&dir.join("yo-server.db"), cfg.limits.db_connections)
+                .context("opening database")?;
             let listener =
                 tokio::net::TcpListener::bind(&cfg.listen).await.with_context(|| format!("binding {}", cfg.listen))?;
             tracing::info!("yo-server listening on {} (registration: {:?})", cfg.listen, cfg.registration);

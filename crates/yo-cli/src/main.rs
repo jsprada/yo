@@ -170,7 +170,13 @@ async fn run(cli: Cli, paths: Paths) -> anyhow::Result<()> {
             let client = match &link {
                 Some(code) => {
                     ui::info("linking to your account… (keep `yo link` running on your other device)");
-                    Client::init_linked(paths.clone(), opts, code).await?
+                    Client::init_linked(paths.clone(), opts, code, |id| {
+                        println!(
+                            " This device is {}. Your other device will ask you to approve it.",
+                            ui::accent(&id.short())
+                        );
+                    })
+                    .await?
                 }
                 None => Client::init(paths.clone(), opts).await?,
             };
@@ -335,22 +341,42 @@ async fn run(cli: Cli, paths: Paths) -> anyhow::Result<()> {
             println!(" If they match, nobody is in the middle of your conversation.");
         }
 
-        Cmd::Link { qr } => {
+        Cmd::Link { qr, yes } => {
             let mut c = open(&paths).await?;
             let cfg = c.cfg.clone();
             let id = c
-                .link_open(move |code| {
-                    println!("{}", ui::rule("link a new device"));
-                    println!(" On the new device run:\n");
-                    let mut cmd = format!("yo init --server {}", cfg.server);
-                    if let Some(p) = &cfg.pin {
-                        cmd.push_str(&format!(" --pin {p}"));
-                    }
-                    cmd.push_str(&format!(" --link {code}"));
-                    println!("     {}", ui::bold(&cmd));
-                    print_code(code, qr);
-                    println!(" {}", ui::dim("Waiting… the code works once and expires in 10 minutes."));
-                })
+                .link_open(
+                    move |code| {
+                        println!("{}", ui::rule("link a new device"));
+                        println!(" On the new device run:\n");
+                        let mut cmd = format!("yo init --server {}", cfg.server);
+                        if let Some(p) = &cfg.pin {
+                            cmd.push_str(&format!(" --pin {p}"));
+                        }
+                        cmd.push_str(&format!(" --link {code}"));
+                        println!("     {}", ui::bold(&cmd));
+                        print_code(code, qr);
+                        ui::warn("whoever uses this code gets a copy of your account; keep it to yourself");
+                        println!(" {}", ui::dim("Waiting… the code works once and expires in 5 minutes."));
+                    },
+                    move |device| {
+                        if yes {
+                            return true;
+                        }
+                        if !interactive() {
+                            ui::error("a device wants to link but there is no terminal to confirm it on; use --yes");
+                            return false;
+                        }
+                        print!(
+                            " Device {} wants to link. It should show the same id. Send it your account? [y/N] ",
+                            ui::accent(&device.short())
+                        );
+                        let _ = std::io::stdout().flush();
+                        let mut answer = String::new();
+                        let _ = std::io::stdin().read_line(&mut answer);
+                        matches!(answer.trim(), "y" | "Y" | "yes")
+                    },
+                )
                 .await?;
             ui::ok(&format!("linked device {}", ui::accent(&id.short())));
         }

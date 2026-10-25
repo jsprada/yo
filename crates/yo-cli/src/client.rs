@@ -26,6 +26,14 @@ const PREKEY_BATCH: usize = 20;
 const PREKEY_LOW: u32 = 5;
 /// How long an invite code stays usable.
 const INVITE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(600);
+/// A link code moves account secrets, so it lives for less time.
+const LINK_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(300);
+/// Rotate the fallback key after this long (it then stays usable as the
+/// "previous" key for one more period, so in-flight session setups survive).
+const FALLBACK_ROTATE_SECS: u64 = 7 * 86400;
+/// …or sooner when one-time keys ran low, which means the fallback key may
+/// have been handed out.
+const FALLBACK_ROTATE_WHEN_LOW_SECS: u64 = 86400;
 /// Longest message accepted by `yo send`. Chosen so that a padded payload
 /// fits the 64 KiB bucket: a message to 16 devices then stays well under the
 /// 2 MiB frame limit.
@@ -171,9 +179,15 @@ impl Client {
     }
 
     /// `yo init --link CODE`: join an existing account from another device.
-    pub async fn init_linked(paths: Paths, opts: InitOptions, code: &str) -> anyhow::Result<Client> {
+    pub async fn init_linked(
+        paths: Paths,
+        opts: InitOptions,
+        code: &str,
+        on_device: impl FnOnce(DeviceId),
+    ) -> anyhow::Result<Client> {
         let (nameplate, code) = invite::parse_code(code)?;
         let mut c = Self::prepare(paths, &opts).await?;
+        on_device(c.me);
         let hello = postcard::to_stdvec(&LinkHello { device: c.me })?;
         let secret = c.pake_join(Purpose::LinkDevice, nameplate, &code, hello).await?;
         let payload: LinkPayload = postcard::from_bytes(&secret).context("malformed link payload")?;
@@ -208,6 +222,10 @@ impl Client {
     }
 
     pub fn refresh_unread(&self) {
+        if let Ok(rels) = self.store.relationships() {
+            let inboxes: Vec<InboxId> = rels.iter().map(|r| r.bundle.my_inbox()).collect();
+            let _ = spool::write_inbox_index(&self.paths, &inboxes);
+        }
         let n = self.store.unread_count().ok();
         let _ = spool::refresh_unread(&self.paths, n);
     }
@@ -255,6 +273,7 @@ impl Client {
             peer_list_version: 0,
             my_devices: vec![],
             peer_devices: vec![],
+            fallback_at: now(),
         };
         let mut olm = OlmState::new();
         let mut rel = self.store.insert_relationship(bundle, &olm)?;
@@ -267,6 +286,9 @@ impl Client {
             self.store.shred_relationship(rel.id)?;
             return Err(e);
         }
+        // Keep the daemon's inbox index current so messages to a brand-new
+        // relationship are counted even before the next unlocked command.
+        self.refresh_unread();
         Ok(rel)
     }
 
@@ -337,6 +359,30 @@ impl Client {
         self.store.save_olm(rel, olm)?;
         self.call(Request::PublishKeys { inbox, one_time, fallback }).await?;
         Ok(())
+    }
+
+    /// Publish fresh one-time keys and a new fallback key for a relationship.
+    async fn rotate_fallback(&mut self, rel: &mut Relationship, olm: &mut OlmState) -> anyhow::Result<()> {
+        self.publish_prekeys(rel, olm, true).await?;
+        rel.bundle.fallback_at = now();
+        Ok(self.store.update_bundle(rel)?)
+    }
+
+    /// Rotate the fallback key of every relationship whose key is older than
+    /// `older_than_secs`. Returns how many were rotated. Errors (e.g. offline)
+    /// are ignored per relationship so one failure doesn't stop the rest.
+    pub async fn rotate_fallback_keys(&mut self, older_than_secs: u64) -> anyhow::Result<usize> {
+        let mut rotated = 0;
+        for mut rel in self.store.relationships()? {
+            if now().saturating_sub(rel.bundle.fallback_at) < older_than_secs {
+                continue;
+            }
+            let mut olm = self.store.load_olm(&rel)?;
+            if self.rotate_fallback(&mut rel, &mut olm).await.is_ok() {
+                rotated += 1;
+            }
+        }
+        Ok(rotated)
     }
 
     /// Refresh both cached device lists of a relationship, refusing rollbacks.
@@ -523,6 +569,9 @@ impl Client {
             report.offline = Some(format!("{e:#}"));
         }
         self.process_spool(&mut report).await?;
+        if report.offline.is_none() {
+            let _ = self.rotate_fallback_keys(FALLBACK_ROTATE_SECS).await;
+        }
         self.refresh_unread();
         Ok(report)
     }
@@ -550,13 +599,19 @@ impl Client {
         // Top up one-time keys where sessions may have consumed them.
         if self.conn.is_some() {
             for id in active {
-                if let Some(rel) = self.store.relationship(id)? {
+                if let Some(mut rel) = self.store.relationship(id)? {
                     let inbox = rel.bundle.my_inbox();
                     if let Ok(Response::KeyCount(n)) = self.call(Request::KeyCount { inbox }).await
                         && n < PREKEY_LOW
                     {
                         let mut olm = self.store.load_olm(&rel)?;
-                        let _ = self.publish_prekeys(&rel, &mut olm, false).await;
+                        // Running low means the fallback key may be in use:
+                        // rotate it too unless it is fresh.
+                        if now().saturating_sub(rel.bundle.fallback_at) > FALLBACK_ROTATE_WHEN_LOW_SECS {
+                            let _ = self.rotate_fallback(&mut rel, &mut olm).await;
+                        } else {
+                            let _ = self.publish_prekeys(&rel, &mut olm, false).await;
+                        }
                     }
                 }
             }
@@ -712,7 +767,7 @@ impl Client {
         self.check_new_name(name).await?;
         let (mut rel, rik_pub) = self.pending_contact(name).await?;
         let payload = postcard::to_stdvec(&AddPayload { rik: rik_pub })?;
-        let result = self.pake_open(Purpose::AddContact, on_code, payload).await;
+        let result = self.pake_open(Purpose::AddContact, on_code, payload, |_| true).await;
         self.finish_add(&mut rel, result).await?;
         Ok(rel)
     }
@@ -815,19 +870,27 @@ impl Client {
     }
 
     /// Opener side of the PAKE: display the code, then exchange payloads.
+    ///
+    /// `confirm` sees the other side's decrypted payload *before* ours is
+    /// sent; returning false aborts without revealing anything.
     async fn pake_open(
         &mut self,
         purpose: Purpose,
         on_code: impl FnOnce(&str),
         mine: Vec<u8>,
+        confirm: impl FnOnce(&[u8]) -> bool,
     ) -> anyhow::Result<Vec<u8>> {
         let nameplate = match self.call(Request::MailboxOpen).await? {
             Response::Nameplate(n) => n,
             r => bail!("unexpected response {r:?}"),
         };
-        let code = invite::new_code(nameplate);
+        let (words, ttl) = match purpose {
+            Purpose::AddContact => (invite::CODE_WORDS, INVITE_TIMEOUT),
+            Purpose::LinkDevice => (invite::LINK_CODE_WORDS, LINK_TIMEOUT),
+        };
+        let code = invite::new_code_with(nameplate, words);
         on_code(&code);
-        let deadline = tokio::time::Instant::now() + INVITE_TIMEOUT;
+        let deadline = tokio::time::Instant::now() + ttl;
         let (pake, m0) = invite::start(&code, purpose);
         self.call(Request::MailboxPut { nameplate, side: Side::Opener, msg: m0 }).await?;
         let theirs0 = self.mailbox_wait(nameplate, Side::Opener, 0, deadline).await?;
@@ -847,6 +910,10 @@ impl Client {
                 bail!("the other side typed a different code — nothing was exchanged. Start again with a new code");
             }
         };
+        if !confirm(&peer) {
+            let _ = self.call(Request::MailboxClose { nameplate }).await;
+            bail!("cancelled — nothing was sent to the other side");
+        }
         let mut reply = keys.confirm(Side::Opener).to_vec();
         reply.extend(keys.seal(Side::Opener, &mine));
         self.call(Request::MailboxPut { nameplate, side: Side::Opener, msg: reply }).await?;
@@ -868,7 +935,8 @@ impl Client {
             }
             Err(e) => return Err(e),
         }
-        let deadline = tokio::time::Instant::now() + INVITE_TIMEOUT;
+        let ttl = if purpose == Purpose::LinkDevice { LINK_TIMEOUT } else { INVITE_TIMEOUT };
+        let deadline = tokio::time::Instant::now() + ttl;
         let (pake, m) = invite::start(code, purpose);
         let theirs0 = self.mailbox_wait(nameplate, Side::Joiner, 0, deadline).await?;
         self.call(Request::MailboxPut { nameplate, side: Side::Joiner, msg: m }).await?;
@@ -887,7 +955,14 @@ impl Client {
     // ── multi-device ─────────────────────────────────────────────────────
 
     /// `yo link`: show a code that a new device uses with `yo init --link`.
-    pub async fn link_open(&mut self, on_code: impl FnOnce(&str)) -> anyhow::Result<DeviceId> {
+    ///
+    /// `confirm` is shown the joining device's id and decides whether the
+    /// account secrets are sent to it.
+    pub async fn link_open(
+        &mut self,
+        on_code: impl FnOnce(&str),
+        confirm: impl FnOnce(DeviceId) -> bool,
+    ) -> anyhow::Result<DeviceId> {
         let me = self.myself()?;
         let contacts = self
             .contacts()?
@@ -904,7 +979,11 @@ impl Client {
             .collect();
         let payload = LinkPayload { self_rik_secret: me.bundle.rik_secret, contacts };
         let bytes = yo_crypto::Zeroizing::new(postcard::to_stdvec(&payload)?);
-        let hello = self.pake_open(Purpose::LinkDevice, on_code, bytes.to_vec()).await?;
+        let hello = self
+            .pake_open(Purpose::LinkDevice, on_code, bytes.to_vec(), |hello| {
+                postcard::from_bytes::<LinkHello>(hello).map(|h| confirm(h.device)).unwrap_or(false)
+            })
+            .await?;
         let hello: LinkHello = postcard::from_bytes(&hello).context("malformed link reply")?;
         Ok(hello.device)
     }

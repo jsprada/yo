@@ -113,6 +113,8 @@ queue_mib_per_device = 64               # ciphertext waiting for one device
 send_mib_per_hour_per_device = 256      # ciphertext one device may send per hour
 sends_per_minute = 120                  # Send requests per device
 mailboxes = 2000                        # live invite mailboxes, server-wide
+failed_registrations_per_minute_per_ip = 5  # bad/missing-token attempts per IP
+db_connections = 4                      # SQLite connections in the pool
 ```
 
 Old `server.toml` files without a `[limits]` table keep working with the
@@ -184,6 +186,7 @@ On top of that, `yo-server` enforces the `[limits]` above:
 |---|---|---|
 | Before TLS | 32 concurrent connections and 60 new connections/min per IP | connection dropped |
 | After `Hello` | 4 concurrent connections per device | `RateLimited` |
+| Registration | 5 failed token attempts/min per IP | `RateLimited` |
 | Sending | 120 sends/min, 256 MiB/hour per device; 64 MiB queued per recipient | `RateLimited` ("slow down", "hourly sending limit", "queue is full") |
 | Invites | 20 opens/joins per minute per device, 2,000 live mailboxes, 16 KiB per message | `RateLimited` |
 | Everything | 2 MiB per frame; `Fetch` pages at 1 MiB | request refused |
