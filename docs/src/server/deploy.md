@@ -147,9 +147,10 @@ Do this with one other person, or with your laptop and a second machine.
       `init`, with their token filled in:
       `yo init --server yo.example.com:7443 --pin sha256:… --token …`
       The pin is what stops a look-alike server; treat it like the token.
-- [ ] Each person builds the client (`cargo install --path crates/yo-cli` from
-      the repo; release binaries are a later step) and runs that line. They
-      pick a passphrase. `yo status` should show `network: ok`.
+- [ ] Each person installs the client with one command
+      (`cargo install --git ssh://git@github.com/jsprada/yo yo-cli`; see
+      [Install](../client/install.md)) and runs that line. They pick a
+      passphrase. `yo status` should show `network: ok`.
 - [ ] Each person: `yo daemon install`, then `yo prompt bash >> ~/.bashrc`
       (or zsh/fish/powershell) and open a new shell.
 - [ ] Exchange keys: one runs `yo add bob`, reads the five-digit code aloud,
@@ -188,9 +189,9 @@ More in [Troubleshooting](../troubleshooting.md).
 
 ## What this deployment does not give you (yet)
 
-- **Release binaries.** Every client machine needs a Rust toolchain to build
-  `yo`. A release workflow that publishes binaries for Linux, macOS and
-  Windows is the next planned step.
+- **Prebuilt binaries.** Installing is one `cargo install` command, which
+  assumes a Rust toolchain on each client machine. That is the intended
+  audience; prebuilt binaries can be added later if it ever matters.
 - **An independent audit.** yo!'s own protocol and server have not been
   audited; only the end-to-end encryption library has. Keep the group to
   people who understand that.

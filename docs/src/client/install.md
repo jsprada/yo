@@ -2,13 +2,20 @@
 
 ## 1. Get the `yo` binary
 
-From source (Rust 1.85 or newer, on Linux, macOS or Windows; the client
-is built and tested on all three in CI):
+yo! is built for people who already have a Rust toolchain (1.85 or newer;
+[rustup](https://rustup.rs) if not). One command installs the `yo` binary
+into `~/.cargo/bin` on Linux, macOS or Windows (all three are tested in CI):
 
 ```sh
-git clone https://github.com/jsprada/yo && cd yo
-cargo install --path crates/yo-cli      # installs `yo` into ~/.cargo/bin
+cargo install --git https://github.com/jsprada/yo yo-cli
 ```
+
+While the repository is private, use SSH instead:
+`cargo install --git ssh://git@github.com/jsprada/yo yo-cli`.
+
+To update later, run the same command again (add `--force` if cargo says it
+is already installed). From a checkout, `cargo install --path crates/yo-cli`
+does the same thing.
 
 Check it works:
 

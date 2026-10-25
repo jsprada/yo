@@ -40,7 +40,8 @@ $ yo reply 12 "yes, see you there"
 ## Quick start
 
 ```sh
-cargo build --release          # → target/release/yo, target/release/yo-server
+cargo install --git https://github.com/jsprada/yo yo-cli   # the `yo` client
+cargo build --release -p yo-server                          # the server (Linux)
 
 # server
 yo-server --dir ./srv init --host yo.example.com
