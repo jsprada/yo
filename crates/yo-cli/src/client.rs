@@ -1363,7 +1363,7 @@ impl Client {
 
     pub async fn admin_status(&mut self) -> anyhow::Result<yo_proto::msg::AdminStatus> {
         match self.call(Request::AdminStatus).await {
-            Ok(Response::AdminStatus(s)) => Ok(s),
+            Ok(Response::AdminStatus(s)) => Ok(*s),
             Ok(r) => bail!("unexpected response {r:?}"),
             Err(e) => Err(Self::admin_error(e)),
         }

@@ -291,17 +291,24 @@ pub enum ErrorCode {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Response {
     Ok,
-    Hello { version: u16, device: DeviceId },
+    Hello {
+        version: u16,
+        device: DeviceId,
+    },
     DeviceList(Option<SignedDeviceList>),
     Key(Option<SignedPreKey>),
     KeyCount(u32),
     Envelopes(Vec<Envelope>),
     Nameplate(u32),
     MailboxMsg(Option<Vec<u8>>),
-    Error { code: ErrorCode, message: String },
+    Error {
+        code: ErrorCode,
+        message: String,
+    },
     Token(String),
     Tokens(Vec<TokenInfo>),
-    AdminStatus(AdminStatus),
+    /// Boxed to keep `Response` small (it is the Err type of several paths).
+    AdminStatus(Box<AdminStatus>),
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]

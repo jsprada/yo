@@ -665,7 +665,7 @@ async fn admins_mint_tokens_from_their_client() {
     let mut plain = Client::init(Paths::at(h2.path()), opts_token(&s, "letmein")).await.unwrap();
 
     // A non-admin device is refused, with a helpful message.
-    let e = plain.admin_create_token(1, "x").await.err().expect("not an admin");
+    let e = plain.admin_create_token(1, "x").await.expect_err("not an admin");
     assert!(e.to_string().contains("not an administrator"), "{e:#}");
     assert!(plain.admin_tokens().await.is_err());
     assert!(plain.admin_status().await.is_err());

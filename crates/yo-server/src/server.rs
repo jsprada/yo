@@ -611,7 +611,7 @@ impl Server {
         };
         let get = |k: &str| stats.iter().find(|(n, _)| *n == k).map(|(_, v)| *v as u64).unwrap_or(0);
         let m = &self.metrics;
-        Response::AdminStatus(yo_proto::msg::AdminStatus {
+        Response::AdminStatus(Box::new(yo_proto::msg::AdminStatus {
             version: crate::status::version_string(),
             protocol: PROTOCOL_VERSION,
             started_at: self.started_at,
@@ -627,7 +627,7 @@ impl Server {
             refused_registration: m.refused_registration.load(Ordering::Relaxed),
             rate_limited: m.rate_limited.load(Ordering::Relaxed),
             live_mailboxes: self.mailboxes.lock().expect("mailbox lock").len() as u64,
-        })
+        }))
     }
 
     async fn put_list(&self, me: DeviceId, signed: SignedDeviceList) -> Response {
