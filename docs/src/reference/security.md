@@ -94,6 +94,27 @@ devices.
   one pin at a time so a self-signed certificate can be rotated without
   locking anyone out (see [Server setup](../server/setup.md#3-certificate-pin-or-ca)).
 
+## Administration and the status page
+
+Two conveniences were added after the initial design; both were built to
+add no new way in:
+
+- **Administrators** are registered devices with a flag on their server
+  record. Admin requests (`yo admin …`) ride the same mutual-TLS connection
+  as every other request, so the credential is the device's own TLS key;
+  there is no password and no web interface. The flag grants exactly one
+  power — admitting devices by minting registration tokens — and leaves with
+  the registration if the device is removed. An administrator cannot read or
+  alter messages, join conversations, or make other administrators (only the
+  operator can, on the server). Minting is rate-limited and logged by device
+  id; tokens minted from a client never grant admin.
+- **The status page** (`yo-status`) is a separate, read-only HTTPS service
+  running as its own user. It learns the server's state from a local,
+  group-only Unix socket that answers one JSON line and reads nothing; page
+  views are served from a once-a-minute cache and never touch the server. It
+  serves `GET` only, carries no scripts, and gets its certificate from Let's
+  Encrypt over TLS-ALPN on 443, so no extra port opens.
+
 ## In transit
 
 Client ↔ server is TLS 1.3 with mutual authentication; TLS 1.2 and earlier
@@ -145,7 +166,8 @@ Being honest about this matters. The server **can** see:
 - that a device belongs to certain inboxes (all its inboxes arrive over the
   same TLS identity), and so how many conversations a device is part of;
 - which device sends to which inbox, when, and the padded size;
-- when a conversation is burned.
+- when a conversation is burned;
+- which devices are administrators, and when one mints or revokes a token.
 
 It can't see names, message contents, or which real person owns a device,
 except what IP addresses and timing reveal. yo! doesn't hide metadata the
