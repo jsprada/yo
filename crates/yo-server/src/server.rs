@@ -79,6 +79,7 @@ pub struct Server {
     /// connections are refused at their next request. Cleared on re-registration.
     revoked: Mutex<std::collections::HashSet<DeviceId>>,
     metrics: Metrics,
+    started_at: u64,
     limits: Limits,
     registration: Registration,
     ttl_days: u64,
@@ -153,6 +154,7 @@ impl Server {
             send_bytes: Mutex::new(HashMap::new()),
             revoked: Mutex::new(std::collections::HashSet::new()),
             metrics: Metrics::default(),
+            started_at: now(),
             limits: cfg.limits.clone(),
             registration: cfg.registration,
             ttl_days: cfg.message_ttl_days,
@@ -535,7 +537,97 @@ impl Server {
                     Err(_) => err(ErrorCode::Unauthorized, "not a participant of this invite"),
                 }
             }
+            Request::AdminCreateToken { uses, note } => self.admin_create_token(me, uses, note).await,
+            Request::AdminListTokens => {
+                if let Err(r) = self.require_admin(me).await {
+                    return r;
+                }
+                match self.db.run(|db| db.list_tokens()).await {
+                    Ok(t) => Response::Tokens(t),
+                    Err(e) => internal(e),
+                }
+            }
+            Request::AdminRevokeToken { token } => {
+                if let Err(r) = self.require_admin(me).await {
+                    return r;
+                }
+                match self.db.run(move |db| db.revoke_token(&token)).await {
+                    Ok(true) => {
+                        info!("admin {} revoked a token", me.short());
+                        Response::Ok
+                    }
+                    Ok(false) => err(ErrorCode::NotFound, "no such token"),
+                    Err(e) => internal(e),
+                }
+            }
+            Request::AdminStatus => {
+                if let Err(r) = self.require_admin(me).await {
+                    return r;
+                }
+                self.admin_status().await
+            }
         }
+    }
+
+    // ── administration ───────────────────────────────────────────────────
+
+    /// Admin requests come over the same mTLS connection as everything else;
+    /// the only extra check is the `admin` flag on the device's registration.
+    async fn require_admin(&self, me: DeviceId) -> Result<(), Response> {
+        match self.db.run(move |db| db.is_admin(&me)).await {
+            Ok(true) => Ok(()),
+            Ok(false) => Err(err(ErrorCode::Unauthorized, "this device is not an administrator")),
+            Err(e) => Err(internal(e)),
+        }
+    }
+
+    async fn admin_create_token(&self, me: DeviceId, uses: u32, note: String) -> Response {
+        if let Err(r) = self.require_admin(me).await {
+            return r;
+        }
+        if !(1..=100).contains(&uses) || note.chars().count() > 80 {
+            return err(ErrorCode::BadRequest, "uses must be 1–100 and the note at most 80 characters");
+        }
+        if !self.allow(&me, "admin-token", 10) {
+            return err(ErrorCode::RateLimited, "too many tokens created; wait a minute");
+        }
+        let token = yo_proto::b32(&yo_crypto::random::<16>());
+        let t = token.clone();
+        let n = note.clone();
+        // Tokens minted from a client never grant admin; that stays with the operator.
+        match self.db.run(move |db| db.create_token(&t, uses, &n, now(), false)).await {
+            Ok(()) => {
+                info!("admin {} created a token (uses={uses}, note={note:?})", me.short());
+                Response::Token(token)
+            }
+            Err(e) => internal(e),
+        }
+    }
+
+    async fn admin_status(&self) -> Response {
+        let stats = match self.db.run(|db| db.stats()).await {
+            Ok(s) => s,
+            Err(e) => return internal(e),
+        };
+        let get = |k: &str| stats.iter().find(|(n, _)| *n == k).map(|(_, v)| *v as u64).unwrap_or(0);
+        let m = &self.metrics;
+        Response::AdminStatus(yo_proto::msg::AdminStatus {
+            version: crate::status::version_string(),
+            protocol: PROTOCOL_VERSION,
+            started_at: self.started_at,
+            registered_devices: get("registered devices"),
+            admins: get("administrators"),
+            unspent_tokens: get("unspent tokens"),
+            live_inboxes: get("live inboxes"),
+            queued_envelopes: get("queued envelopes"),
+            one_time_keys: get("one-time keys"),
+            accepted: m.accepted.load(Ordering::Relaxed),
+            refused_ip: m.refused_ip.load(Ordering::Relaxed),
+            refused_device_conn: m.refused_device_conn.load(Ordering::Relaxed),
+            refused_registration: m.refused_registration.load(Ordering::Relaxed),
+            rate_limited: m.rate_limited.load(Ordering::Relaxed),
+            live_mailboxes: self.mailboxes.lock().expect("mailbox lock").len() as u64,
+        })
     }
 
     async fn put_list(&self, me: DeviceId, signed: SignedDeviceList) -> Response {

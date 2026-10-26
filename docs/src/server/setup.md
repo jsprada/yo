@@ -155,6 +155,11 @@ Each *device* registers once. Someone setting up a laptop and a desktop
 needs a token with `--uses 2` (or two tokens). Devices that are already
 registered never need a token again.
 
+Create **your own** first token with `--admin`: the device you register with
+it becomes an administrator and can mint all further tokens from its own
+client with `yo admin token`, so this is the last time you need SSH for it.
+See [Administration from your client](admin.md).
+
 ## 6. Run it as a service (systemd)
 
 `/etc/systemd/system/yo-server.service`:

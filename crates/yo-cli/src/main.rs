@@ -2,7 +2,7 @@ use std::io::{IsTerminal, Read, Write};
 
 use anyhow::{Context, anyhow, bail};
 use clap::Parser;
-use yo_cli::cli::{Cli, Cmd, DaemonCmd, DevicesCmd};
+use yo_cli::cli::{AdminCmd, Cli, Cmd, DaemonCmd, DevicesCmd};
 use yo_cli::client::{Client, InitOptions, RESERVED};
 use yo_cli::ui;
 use yo_cli::{agent, daemon, service};
@@ -535,6 +535,76 @@ async fn run(cli: Cli, paths: Paths) -> anyhow::Result<()> {
         }
 
         Cmd::Status => status(&paths).await?,
+
+        Cmd::Admin { cmd } => {
+            let mut c = open(&paths).await?;
+            match cmd {
+                AdminCmd::Token { uses, note } => {
+                    let (token, line) = c.admin_create_token(uses, &note).await?;
+                    ui::ok(&format!(
+                        "token {} ({} registration{}{})",
+                        ui::accent(&token),
+                        uses,
+                        if uses == 1 { "" } else { "s" },
+                        if note.is_empty() { String::new() } else { format!(", {note}") }
+                    ));
+                    println!("\n Send them this line, over a channel you trust:\n");
+                    println!("   {}\n", ui::bold(&line));
+                    println!(
+                        " {}",
+                        ui::dim("They need Rust: cargo install --git https://github.com/jsprada/yo yo-cli")
+                    );
+                }
+                AdminCmd::Tokens => {
+                    let tokens = c.admin_tokens().await?;
+                    if tokens.is_empty() {
+                        println!("{}", ui::dim("No unspent tokens."));
+                    }
+                    for t in tokens {
+                        println!(
+                            " {}  {} left  {}  {}{}",
+                            ui::accent(&t.token),
+                            t.uses_left,
+                            ui::dim(&format!("created {}", ui::when(t.created_at))),
+                            t.note,
+                            if t.grants_admin { ui::red(" [admin]") } else { String::new() }
+                        );
+                    }
+                }
+                AdminCmd::Revoke { token } => {
+                    c.admin_revoke(&token).await?;
+                    ui::ok("token revoked");
+                }
+                AdminCmd::Status => {
+                    let s = c.admin_status().await?;
+                    println!("{}", ui::rule(&format!("yo-server {}", s.version)));
+                    let up = yo_proto::now().saturating_sub(s.started_at);
+                    println!(
+                        " up since        {} ({}d {}h {}m)",
+                        ui::when(s.started_at),
+                        up / 86400,
+                        (up % 86400) / 3600,
+                        (up % 3600) / 60
+                    );
+                    println!(" protocol        {}", s.protocol);
+                    println!(" devices         {} ({} admin)", s.registered_devices, s.admins);
+                    println!(" unspent tokens  {}", s.unspent_tokens);
+                    println!(
+                        " conversations   {} inboxes, {} queued envelopes, {} one-time keys",
+                        s.live_inboxes, s.queued_envelopes, s.one_time_keys
+                    );
+                    println!(
+                        " abuse counters  accepted {}, refused by IP {}, by device cap {}, registrations refused {}, rate-limited {}, live invites {}",
+                        s.accepted,
+                        s.refused_ip,
+                        s.refused_device_conn,
+                        s.refused_registration,
+                        s.rate_limited,
+                        s.live_mailboxes
+                    );
+                }
+            }
+        }
 
         Cmd::Send(args) => {
             let name = args.first().cloned().unwrap_or_default();

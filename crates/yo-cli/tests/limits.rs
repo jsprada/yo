@@ -42,7 +42,7 @@ async fn server_with(tune: impl FnOnce(&mut Config)) -> TestServer {
     tune(&mut cfg);
     let db_path = dir.path().join("server.db");
     if cfg.registration == Registration::Token {
-        Db::open(&db_path).unwrap().create_token("letmein", 1, "test", 0).unwrap();
+        Db::open(&db_path).unwrap().create_token("letmein", 1, "test", 0, false).unwrap();
     }
     let db = DbPool::open(&db_path, 2).unwrap();
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -650,4 +650,61 @@ async fn rekeying_rotates_the_revocation_authority() {
     // …but a normal removal, signed with the new one, works.
     alice.remove_device(&alice2.me.to_string()[..8], false).await.unwrap();
     assert_eq!(alice.devices().await.unwrap().len(), 1);
+}
+
+// ── administration from a client ─────────────────────────────────────────
+
+#[tokio::test]
+async fn admins_mint_tokens_from_their_client() {
+    let s = server_with(|c| c.registration = Registration::Token).await;
+    // The operator's own token grants admin; "letmein" (from the harness) does not.
+    Db::open(&s._dir.path().join("server.db")).unwrap().create_token("boss", 1, "operator", 0, true).unwrap();
+    let h1 = tempfile::tempdir().unwrap();
+    let h2 = tempfile::tempdir().unwrap();
+    let mut admin = Client::init(Paths::at(h1.path()), opts_token(&s, "boss")).await.unwrap();
+    let mut plain = Client::init(Paths::at(h2.path()), opts_token(&s, "letmein")).await.unwrap();
+
+    // A non-admin device is refused, with a helpful message.
+    let e = plain.admin_create_token(1, "x").await.err().expect("not an admin");
+    assert!(e.to_string().contains("not an administrator"), "{e:#}");
+    assert!(plain.admin_tokens().await.is_err());
+    assert!(plain.admin_status().await.is_err());
+
+    // The admin mints a token; the printed line carries server, pin and token.
+    let (tok, line) = admin.admin_create_token(1, "alice").await.unwrap();
+    assert!(line.starts_with(&format!("yo init --server {}", s.addr)));
+    assert!(line.contains(&format!("--pin {}", s.pin)) && line.ends_with(&format!("--token {tok}")));
+    let listed = admin.admin_tokens().await.unwrap();
+    assert!(listed.iter().any(|t| t.token == tok && t.note == "alice" && !t.grants_admin));
+
+    // The token registers a new device, which is not an admin.
+    let h3 = tempfile::tempdir().unwrap();
+    let mut alice = Client::init(Paths::at(h3.path()), opts_token(&s, &tok)).await.unwrap();
+    assert!(alice.admin_status().await.is_err(), "client-minted tokens never grant admin");
+    assert!(!admin.admin_tokens().await.unwrap().iter().any(|t| t.token == tok), "spent tokens disappear");
+
+    // Revoking an unspent token makes it unusable.
+    let (tok2, _) = admin.admin_create_token(2, "bob").await.unwrap();
+    admin.admin_revoke(&tok2).await.unwrap();
+    let h4 = tempfile::tempdir().unwrap();
+    assert!(Client::init(Paths::at(h4.path()), opts_token(&s, &tok2)).await.is_err());
+    assert!(admin.admin_revoke(&tok2).await.is_err(), "already gone");
+
+    // Status is readable and sane.
+    let st = admin.admin_status().await.unwrap();
+    assert!(!st.version.is_empty());
+    assert_eq!(st.admins, 1);
+    assert!(st.registered_devices >= 3, "{st:?}");
+
+    // Bounds and rate limit.
+    assert!(admin.admin_create_token(0, "").await.is_err());
+    assert!(admin.admin_create_token(101, "").await.is_err());
+    let mut limited = false;
+    for _ in 0..12 {
+        if admin.admin_create_token(1, "spam").await.is_err() {
+            limited = true;
+            break;
+        }
+    }
+    assert!(limited, "token minting is rate-limited");
 }

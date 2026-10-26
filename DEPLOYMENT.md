@@ -384,10 +384,25 @@ at rest.
 
 ## 8. Registration tokens — one per person
 
+Your own first token, with `--admin`, so that your device can mint every
+later token from your laptop (`yo admin token`) without SSH:
+
+```sh
+# sudo -u yo yo-server --dir /var/lib/yo-server token create --admin --note "me"
+```
+
+Tokens for everyone else, either from the server:
+
 ```sh
 # sudo -u yo yo-server --dir /var/lib/yo-server token create --note "alice"
 vil2sobn3s3hozvk22au3is3bq
 (valid for 1 device registration(s))
+```
+
+or, once your device is registered as an administrator, from your laptop:
+
+```sh
+$ yo admin token --note alice      # prints the whole yo init line to send
 ```
 
 `--uses 2` for someone with two machines. `token list` / `token revoke

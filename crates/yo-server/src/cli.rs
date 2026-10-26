@@ -50,6 +50,22 @@ pub enum Cmd {
         #[command(subcommand)]
         cmd: TokenCmd,
     },
+    /// Manage which devices may administer the server from their client.
+    Admin {
+        #[command(subcommand)]
+        cmd: AdminCmd,
+    },
+}
+
+#[derive(Subcommand)]
+pub enum AdminCmd {
+    /// Make a registered device an administrator (id or its first characters,
+    /// as shown by `yo status` on that device).
+    Grant { device: String },
+    /// Take administrator rights away from a device.
+    Revoke { device: String },
+    /// List registered devices and which are administrators.
+    List,
 }
 
 #[derive(Subcommand)]
@@ -62,6 +78,10 @@ pub enum TokenCmd {
         /// Free-form note to remember who it is for.
         #[arg(long, default_value = "")]
         note: String,
+        /// The device that registers with this token becomes an administrator
+        /// and can mint further tokens from its own client (`yo admin token`).
+        #[arg(long)]
+        admin: bool,
     },
     /// List unused tokens.
     List,

@@ -644,9 +644,11 @@ Next steps
          | gpg --symmetric --cipher-algo AES256 > /root/yo-server-identity.tgz.gpg
      …and copy that file off this machine.
   2. Add the same two ports (ssh, $PORT) to your provider's cloud firewall.
-  3. Create one registration token per person:
-       sudo -u yo yo-server --dir $DATA_DIR token create --note "alice"
-     and send them the line above with the token filled in, over a channel you trust.
+  3. Create YOUR token with --admin (your device can then mint all later ones
+     from your laptop with \`yo admin token\`, no SSH needed):
+       sudo -u yo yo-server --dir $DATA_DIR token create --admin --note "me"
+     Tokens for others:  sudo -u yo yo-server --dir $DATA_DIR token create --note "alice"
+     Send each person the line above with their token filled in, over a channel you trust.
   4. Later: yo-server-update            # rebuild from $BRANCH + OS packages
             yo-server-update --check    # just report what would change
             journalctl -u yo-server -f  # watch it run

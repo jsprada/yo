@@ -40,7 +40,7 @@ async fn start_server(registration: Registration) -> TestServer {
     let mut cfg = Config::new("localhost".into(), 0);
     cfg.registration = registration;
     if registration == Registration::Token {
-        Db::open(&db_path).unwrap().create_token("letmein", 1, "test", 0).unwrap();
+        Db::open(&db_path).unwrap().create_token("letmein", 1, "test", 0, false).unwrap();
     }
     let db = DbPool::open(&db_path, 2).unwrap();
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();

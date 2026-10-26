@@ -51,6 +51,10 @@ fn request_name(req: &Request) -> &'static str {
         Request::Ping => "Ping",
         Request::BindRevocation(_) => "BindRevocation",
         Request::Deregister(_) => "Deregister",
+        Request::AdminCreateToken { .. } => "AdminCreateToken",
+        Request::AdminListTokens => "AdminListTokens",
+        Request::AdminRevokeToken { .. } => "AdminRevokeToken",
+        Request::AdminStatus => "AdminStatus",
     }
 }
 

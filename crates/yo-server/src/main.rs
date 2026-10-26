@@ -2,7 +2,7 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{Context, bail};
 use clap::Parser;
-use yo_server::cli::{Cli, Cmd, TokenCmd};
+use yo_server::cli::{AdminCmd, Cli, Cmd, TokenCmd};
 use yo_server::db::Db;
 use yo_server::{Config, Registration, Server};
 
@@ -123,15 +123,24 @@ async fn main() -> anyhow::Result<()> {
         Cmd::Token { cmd } => {
             let db = open_db(&dir)?;
             match cmd {
-                TokenCmd::Create { uses, note } => {
+                TokenCmd::Create { uses, note, admin } => {
                     let token = yo_proto::b32(&random16());
-                    db.create_token(&token, uses, &note, yo_proto::now())?;
+                    db.create_token(&token, uses, &note, yo_proto::now(), admin)?;
                     println!("{token}");
-                    eprintln!("(valid for {uses} device registration(s))");
+                    eprintln!(
+                        "(valid for {uses} device registration(s){})",
+                        if admin { "; the device becomes an administrator" } else { "" }
+                    );
                 }
                 TokenCmd::List => {
-                    for (t, uses, _, note) in db.list_tokens()? {
-                        println!("{t}  uses left: {uses}  {note}");
+                    for t in db.list_tokens()? {
+                        println!(
+                            "{}  uses left: {}  {}{}",
+                            t.token,
+                            t.uses_left,
+                            t.note,
+                            if t.grants_admin { "  [admin]" } else { "" }
+                        );
                     }
                 }
                 TokenCmd::Revoke { token } => {
@@ -139,6 +148,36 @@ async fn main() -> anyhow::Result<()> {
                         bail!("no such token");
                     }
                     println!("revoked");
+                }
+            }
+        }
+        Cmd::Admin { cmd } => {
+            let db = open_db(&dir)?;
+            let find = |prefix: &str| -> anyhow::Result<yo_proto::DeviceId> {
+                let p = prefix.to_ascii_lowercase();
+                let all = db.registered_devices()?;
+                let m: Vec<_> = all.iter().filter(|(d, _, _)| d.to_string().starts_with(&p)).collect();
+                match m.as_slice() {
+                    [one] => Ok(one.0),
+                    [] => bail!("no registered device starts with '{prefix}' (see `yo-server admin list`)"),
+                    _ => bail!("'{prefix}' matches several devices; type more characters"),
+                }
+            };
+            match cmd {
+                AdminCmd::Grant { device } => {
+                    let d = find(&device)?;
+                    db.set_admin(&d, true)?;
+                    println!("{} is now an administrator", d.short());
+                }
+                AdminCmd::Revoke { device } => {
+                    let d = find(&device)?;
+                    db.set_admin(&d, false)?;
+                    println!("{} is no longer an administrator", d.short());
+                }
+                AdminCmd::List => {
+                    for (d, at, admin) in db.registered_devices()? {
+                        println!("{}  registered {}  {}", d.short(), at, if admin { "admin" } else { "" });
+                    }
                 }
             }
         }

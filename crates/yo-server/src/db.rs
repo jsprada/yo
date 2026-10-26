@@ -22,13 +22,15 @@ PRAGMA foreign_keys = ON;
 CREATE TABLE IF NOT EXISTS registered (
     device BLOB PRIMARY KEY,
     registered_at INTEGER NOT NULL,
-    revocation BLOB
+    revocation BLOB,
+    admin INTEGER NOT NULL DEFAULT 0
 );
 CREATE TABLE IF NOT EXISTS tokens (
     token TEXT PRIMARY KEY,
     uses_left INTEGER NOT NULL,
     created_at INTEGER NOT NULL,
-    note TEXT NOT NULL DEFAULT ''
+    note TEXT NOT NULL DEFAULT '',
+    grants_admin INTEGER NOT NULL DEFAULT 0
 );
 CREATE TABLE IF NOT EXISTS inboxes (
     inbox BLOB PRIMARY KEY,
@@ -107,15 +109,49 @@ impl Db {
 
     /// Add any columns missing from an older database.
     fn migrate(conn: &Connection) -> rusqlite::Result<()> {
-        let has_revocation = conn
-            .prepare("PRAGMA table_info(registered)")?
-            .query_map([], |r| r.get::<_, String>(1))?
-            .filter_map(|c| c.ok())
-            .any(|c| c == "revocation");
-        if !has_revocation {
+        let columns = |table: &str| -> rusqlite::Result<Vec<String>> {
+            conn.prepare(&format!("PRAGMA table_info({table})"))?.query_map([], |r| r.get::<_, String>(1))?.collect()
+        };
+        let reg = columns("registered")?;
+        if !reg.iter().any(|c| c == "revocation") {
             conn.execute("ALTER TABLE registered ADD COLUMN revocation BLOB", [])?;
         }
+        if !reg.iter().any(|c| c == "admin") {
+            conn.execute("ALTER TABLE registered ADD COLUMN admin INTEGER NOT NULL DEFAULT 0", [])?;
+        }
+        if !columns("tokens")?.iter().any(|c| c == "grants_admin") {
+            conn.execute("ALTER TABLE tokens ADD COLUMN grants_admin INTEGER NOT NULL DEFAULT 0", [])?;
+        }
         Ok(())
+    }
+
+    // ── administrators ───────────────────────────────────────────────────
+
+    pub fn is_admin(&self, device: &DeviceId) -> rusqlite::Result<bool> {
+        Ok(self
+            .conn
+            .query_row("SELECT admin FROM registered WHERE device = ?1", [&device.0[..]], |r| r.get::<_, i64>(0))
+            .optional()?
+            .unwrap_or(0)
+            != 0)
+    }
+
+    /// Returns false if the device is not registered.
+    pub fn set_admin(&self, device: &DeviceId, admin: bool) -> rusqlite::Result<bool> {
+        Ok(self
+            .conn
+            .execute("UPDATE registered SET admin = ?2 WHERE device = ?1", params![&device.0[..], admin as i64])?
+            == 1)
+    }
+
+    /// Every registered device: (id, registered_at, admin).
+    pub fn registered_devices(&self) -> rusqlite::Result<Vec<(DeviceId, u64, bool)>> {
+        let mut st = self.conn.prepare("SELECT device, registered_at, admin FROM registered ORDER BY registered_at")?;
+        let rows = st.query_map([], |r| {
+            let d: Vec<u8> = r.get(0)?;
+            Ok((DeviceId(d.try_into().unwrap_or([0; 16])), r.get::<_, i64>(1)? as u64, r.get::<_, i64>(2)? != 0))
+        })?;
+        rows.collect()
     }
 
     /// Record a device's revocation authority. First write wins, so a device
@@ -164,31 +200,51 @@ impl Db {
     /// false (and changes nothing) when the token is invalid or used up.
     pub fn register_with_token(&mut self, device: &DeviceId, token: &str, now: u64) -> rusqlite::Result<bool> {
         let tx = self.conn.transaction()?;
-        let n =
-            tx.execute("UPDATE tokens SET uses_left = uses_left - 1 WHERE token = ?1 AND uses_left > 0", [token])?;
-        if n != 1 {
-            return Ok(false);
-        }
+        let grants_admin: Option<i64> = tx
+            .query_row("SELECT grants_admin FROM tokens WHERE token = ?1 AND uses_left > 0", [token], |r| r.get(0))
+            .optional()?;
+        let Some(grants_admin) = grants_admin else { return Ok(false) };
+        tx.execute("UPDATE tokens SET uses_left = uses_left - 1 WHERE token = ?1", [token])?;
         tx.execute(
             "INSERT OR IGNORE INTO registered (device, registered_at) VALUES (?1, ?2)",
             params![&device.0[..], now as i64],
         )?;
+        if grants_admin != 0 {
+            tx.execute("UPDATE registered SET admin = 1 WHERE device = ?1", [&device.0[..]])?;
+        }
         tx.execute("DELETE FROM tokens WHERE uses_left <= 0", [])?;
         tx.commit()?;
         Ok(true)
     }
 
-    pub fn create_token(&self, token: &str, uses: u32, note: &str, now: u64) -> rusqlite::Result<()> {
+    pub fn create_token(
+        &self,
+        token: &str,
+        uses: u32,
+        note: &str,
+        now: u64,
+        grants_admin: bool,
+    ) -> rusqlite::Result<()> {
         self.conn.execute(
-            "INSERT INTO tokens (token, uses_left, created_at, note) VALUES (?1, ?2, ?3, ?4)",
-            params![token, uses, now as i64, note],
+            "INSERT INTO tokens (token, uses_left, created_at, note, grants_admin) VALUES (?1, ?2, ?3, ?4, ?5)",
+            params![token, uses, now as i64, note, grants_admin as i64],
         )?;
         Ok(())
     }
 
-    pub fn list_tokens(&self) -> rusqlite::Result<Vec<(String, u32, u64, String)>> {
-        let mut st = self.conn.prepare("SELECT token, uses_left, created_at, note FROM tokens ORDER BY created_at")?;
-        let rows = st.query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get::<_, i64>(2)? as u64, r.get(3)?)))?;
+    pub fn list_tokens(&self) -> rusqlite::Result<Vec<yo_proto::msg::TokenInfo>> {
+        let mut st = self
+            .conn
+            .prepare("SELECT token, uses_left, created_at, note, grants_admin FROM tokens ORDER BY created_at")?;
+        let rows = st.query_map([], |r| {
+            Ok(yo_proto::msg::TokenInfo {
+                token: r.get(0)?,
+                uses_left: r.get(1)?,
+                created_at: r.get::<_, i64>(2)? as u64,
+                note: r.get(3)?,
+                grants_admin: r.get::<_, i64>(4)? != 0,
+            })
+        })?;
         rows.collect()
     }
 
@@ -423,10 +479,12 @@ impl Db {
         Ok(a + b)
     }
 
-    pub fn stats(&self) -> rusqlite::Result<[(&'static str, i64); 5]> {
+    pub fn stats(&self) -> rusqlite::Result<[(&'static str, i64); 7]> {
         let c = |sql: &str| self.conn.query_row(sql, [], |r| r.get::<_, i64>(0));
         Ok([
             ("registered devices", c("SELECT COUNT(*) FROM registered")?),
+            ("administrators", c("SELECT COUNT(*) FROM registered WHERE admin = 1")?),
+            ("unspent tokens", c("SELECT COUNT(*) FROM tokens")?),
             ("live inboxes", c("SELECT COUNT(*) FROM inboxes WHERE burned_at IS NULL")?),
             ("burned inboxes (markers)", c("SELECT COUNT(*) FROM inboxes WHERE burned_at IS NOT NULL")?),
             ("queued envelopes", c("SELECT COUNT(*) FROM envelopes")?),
@@ -444,7 +502,7 @@ mod tests {
         let mut db = Db::open_in_memory().unwrap();
         let a = DeviceId([1; 16]);
         let b = DeviceId([2; 16]);
-        db.create_token("t1", 1, "", 0).unwrap();
+        db.create_token("t1", 1, "", 0, false).unwrap();
         assert!(!db.register_with_token(&a, "nope", 1).unwrap(), "bad token changes nothing");
         assert!(!db.is_registered(&a).unwrap());
         assert_eq!(db.list_tokens().unwrap().len(), 1, "token untouched after a bad attempt");
@@ -453,5 +511,24 @@ mod tests {
         assert!(db.list_tokens().unwrap().is_empty(), "used-up token is deleted");
         assert!(!db.register_with_token(&b, "t1", 2).unwrap());
         assert!(!db.is_registered(&b).unwrap());
+    }
+
+    #[test]
+    fn admin_tokens_grant_admin_and_deregistration_removes_it() {
+        let mut db = Db::open_in_memory().unwrap();
+        let boss = DeviceId([7; 16]);
+        let user = DeviceId([8; 16]);
+        db.create_token("boss", 1, "me", 0, true).unwrap();
+        db.create_token("plain", 1, "", 0, false).unwrap();
+        assert!(db.register_with_token(&boss, "boss", 1).unwrap());
+        assert!(db.register_with_token(&user, "plain", 1).unwrap());
+        assert!(db.is_admin(&boss).unwrap());
+        assert!(!db.is_admin(&user).unwrap());
+        assert!(db.set_admin(&user, true).unwrap());
+        assert!(db.is_admin(&user).unwrap());
+        assert!(!db.set_admin(&DeviceId([9; 16]), true).unwrap(), "unknown device");
+        db.deregister(&boss).unwrap();
+        assert!(!db.is_admin(&boss).unwrap(), "admin power leaves with the registration");
+        assert_eq!(db.registered_devices().unwrap().len(), 1);
     }
 }

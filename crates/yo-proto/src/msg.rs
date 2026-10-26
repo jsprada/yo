@@ -126,6 +126,37 @@ impl Deregister {
     }
 }
 
+/// An unspent registration token, as shown to an administrator.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TokenInfo {
+    pub token: String,
+    pub uses_left: u32,
+    pub created_at: u64,
+    pub note: String,
+    /// The device that registers with it becomes an administrator.
+    pub grants_admin: bool,
+}
+
+/// Server health and counters for an administrator. No per-user data.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AdminStatus {
+    pub version: String,
+    pub protocol: u16,
+    pub started_at: u64,
+    pub registered_devices: u64,
+    pub admins: u64,
+    pub unspent_tokens: u64,
+    pub live_inboxes: u64,
+    pub queued_envelopes: u64,
+    pub one_time_keys: u64,
+    pub accepted: u64,
+    pub refused_ip: u64,
+    pub refused_device_conn: u64,
+    pub refused_registration: u64,
+    pub rate_limited: u64,
+    pub live_mailboxes: u64,
+}
+
 /// Ciphertext addressed to one device of an inbox.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct OutEnvelope {
@@ -226,6 +257,19 @@ pub enum Request {
     BindRevocation(BindRevocation),
     /// Deregister a device using its bound revocation authority.
     Deregister(Deregister),
+    // ── administration (devices flagged admin on the server) ──
+    /// Mint a registration token. → `Response::Token`
+    AdminCreateToken {
+        uses: u32,
+        note: String,
+    },
+    /// → `Response::Tokens`
+    AdminListTokens,
+    AdminRevokeToken {
+        token: String,
+    },
+    /// → `Response::AdminStatus`
+    AdminStatus,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -255,6 +299,9 @@ pub enum Response {
     Nameplate(u32),
     MailboxMsg(Option<Vec<u8>>),
     Error { code: ErrorCode, message: String },
+    Token(String),
+    Tokens(Vec<TokenInfo>),
+    AdminStatus(AdminStatus),
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]

@@ -9,6 +9,7 @@
 - [First deployment checklist](server/deploy.md)
 - [Deployment runbook (every command)](server/runbook.md)
 - [Status page](server/status-page.md)
+- [Administration from your client](server/admin.md)
 
 # Using yo!
 

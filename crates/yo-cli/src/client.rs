@@ -45,7 +45,7 @@ const SEND_CHUNK_BYTES: usize = 1024 * 1024;
 /// Names that cannot be used for contacts because they are commands.
 pub const RESERVED: &[&str] = &[
     "init", "add", "read", "reply", "history", "contacts", "rename", "burn", "verify", "link", "devices", "unlock",
-    "lock", "daemon", "prompt", "status", "sync", "passwd", "help", "me", "version", "rekey",
+    "lock", "daemon", "prompt", "status", "sync", "passwd", "help", "me", "version", "rekey", "admin",
 ];
 
 pub struct InitOptions {
@@ -1311,6 +1311,62 @@ impl Client {
         }
         self.store.shred_relationship(rel.id)?;
         Ok(())
+    }
+
+    // ── administration ───────────────────────────────────────────────────
+
+    fn admin_error(e: anyhow::Error) -> anyhow::Error {
+        if is_code(&e, ErrorCode::Unauthorized) {
+            anyhow!(
+                "this device is not an administrator of the server. The operator can make it one with \
+                 `yo-server admin grant <device-id>` (your id is shown by `yo status`)"
+            )
+        } else if e.downcast_ref::<yo_proto::frame::FrameError>().is_some()
+            || e.to_string().contains("connection closed")
+        {
+            anyhow!("the server did not understand that request; it probably needs updating (yo-server-update)")
+        } else {
+            e
+        }
+    }
+
+    /// Mint a token. Returns `(token, full yo init line)`.
+    pub async fn admin_create_token(&mut self, uses: u32, note: &str) -> anyhow::Result<(String, String)> {
+        let token = match self.call(Request::AdminCreateToken { uses, note: note.to_string() }).await {
+            Ok(Response::Token(t)) => t,
+            Ok(r) => bail!("unexpected response {r:?}"),
+            Err(e) => return Err(Self::admin_error(e)),
+        };
+        let mut line = format!("yo init --server {}", self.cfg.server);
+        if let Some(p) = &self.cfg.pin {
+            line.push_str(&format!(" --pin {p}"));
+        }
+        line.push_str(&format!(" --token {token}"));
+        Ok((token, line))
+    }
+
+    pub async fn admin_tokens(&mut self) -> anyhow::Result<Vec<yo_proto::msg::TokenInfo>> {
+        match self.call(Request::AdminListTokens).await {
+            Ok(Response::Tokens(t)) => Ok(t),
+            Ok(r) => bail!("unexpected response {r:?}"),
+            Err(e) => Err(Self::admin_error(e)),
+        }
+    }
+
+    pub async fn admin_revoke(&mut self, token: &str) -> anyhow::Result<()> {
+        match self.call(Request::AdminRevokeToken { token: token.trim().to_string() }).await {
+            Ok(_) => Ok(()),
+            Err(e) if is_code(&e, ErrorCode::NotFound) => bail!("no such token (already used, or mistyped)"),
+            Err(e) => Err(Self::admin_error(e)),
+        }
+    }
+
+    pub async fn admin_status(&mut self) -> anyhow::Result<yo_proto::msg::AdminStatus> {
+        match self.call(Request::AdminStatus).await {
+            Ok(Response::AdminStatus(s)) => Ok(s),
+            Ok(r) => bail!("unexpected response {r:?}"),
+            Err(e) => Err(Self::admin_error(e)),
+        }
     }
 
     // ── status ───────────────────────────────────────────────────────────

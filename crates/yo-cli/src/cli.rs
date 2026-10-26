@@ -137,6 +137,11 @@ pub enum Cmd {
     },
     /// Show connection, lock and unread status.
     Status,
+    /// Administer the server from this device (if the operator made it an admin).
+    Admin {
+        #[command(subcommand)]
+        cmd: AdminCmd,
+    },
     #[command(external_subcommand)]
     Send(Vec<String>),
 }
@@ -168,4 +173,23 @@ pub enum DaemonCmd {
     Install,
     /// Remove the login service.
     Uninstall,
+}
+
+#[derive(Subcommand)]
+pub enum AdminCmd {
+    /// Mint a registration token and print the `yo init` line to send.
+    Token {
+        /// How many devices may register with it.
+        #[arg(long, default_value_t = 1)]
+        uses: u32,
+        /// A note to remember who it is for.
+        #[arg(long, default_value = "")]
+        note: String,
+    },
+    /// List unspent tokens.
+    Tokens,
+    /// Delete a token.
+    Revoke { token: String },
+    /// Server version, uptime, counts and abuse counters.
+    Status,
 }

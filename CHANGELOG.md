@@ -6,6 +6,17 @@ All notable changes to yo! are recorded here. The format follows
 
 ## [Unreleased]
 
+### Added (administration from a client)
+
+- Devices can be administrators: `yo admin token [--uses N] [--note T]` mints
+  a registration token and prints the full `yo init` line; `yo admin tokens`,
+  `yo admin revoke`, `yo admin status` (version, uptime, counts, abuse
+  counters). Requests go over the existing mTLS connection; the only check is
+  an `admin` flag on the device's registration, which deregistration clears.
+  Rate-limited (10/min) and logged. Client-minted tokens never grant admin.
+- Server side: `yo-server token create --admin` (the registering device
+  becomes an administrator), `yo-server admin grant|revoke|list`.
+
 ### Added (status page)
 
 - `yo-status`: an optional read-only HTTPS page for a server — what yo! is,

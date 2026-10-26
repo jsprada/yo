@@ -169,6 +169,29 @@ Print the prompt-indicator snippet. `<shell>` is `bash`, `zsh`, `fish` or
 Server, pin, device id, data directory, daemon/agent state, network check,
 unread count.
 
+### `yo admin token`
+
+Mint a registration token on the server and print the full `yo init …` line
+to send to the new person. Only works on a device the operator has made an
+administrator. → [Administration](../server/admin.md)
+
+| Option | |
+|---|---|
+| `--uses N` | How many devices may register with it (default 1, max 100). |
+| `--note TEXT` | A note to remember who it is for. |
+
+### `yo admin tokens`
+
+List unspent tokens.
+
+### `yo admin revoke <token>`
+
+Delete an unspent token.
+
+### `yo admin status`
+
+Server version and uptime, device/token/inbox counts, and the abuse counters.
+
 ### Global
 
 | Option | |
@@ -220,6 +243,7 @@ Counts of devices, inboxes, queued envelopes, keys.
 |---|---|
 | `--uses N` | Registrations allowed (default 1). |
 | `--note TEXT` | A note for yourself. |
+| `--admin` | The device that registers with this token becomes an administrator and can mint further tokens from its own client (`yo admin token`). Use it for your own first device. |
 
 ### `yo-server token list`
 
@@ -228,3 +252,16 @@ List unused tokens.
 ### `yo-server token revoke <token>`
 
 Delete a token.
+
+### `yo-server admin grant <device>`
+
+Make a registered device an administrator (`<device>` is the id or its first
+characters, as shown by `yo status` on that device).
+
+### `yo-server admin revoke <device>`
+
+Take administrator rights away again.
+
+### `yo-server admin list`
+
+Registered devices and which of them are administrators.
