@@ -35,6 +35,8 @@ the code someone gave you. → [Contacts](../client/contacts.md)
 | Option | |
 |---|---|
 | `--qr` | Also show the code as a QR code. |
+| `--invite` | Also mint a registration token (admin devices only) and print one paste-able block: install, `yo init … --pin … --token …`, and `yo add <you> <code>`. For people who aren't on the server yet. |
+| `--as NAME` | With `--invite`: the name to suggest they call you (default: your login name). |
 
 ### `yo read`
 

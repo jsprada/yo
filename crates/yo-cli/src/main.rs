@@ -205,20 +205,51 @@ async fn run(cli: Cli, paths: Paths) -> anyhow::Result<()> {
             }
         }
 
-        Cmd::Add { name, code, qr } => {
+        Cmd::Add { name, code, qr, invite, as_name } => {
             let mut c = open(&paths).await?;
             let rel = if code.is_empty() {
                 let who = name.clone();
+                // With --invite, mint the newcomer's registration token first so
+                // the whole block is ready the moment the code is.
+                let init_line =
+                    if invite { Some(c.admin_create_token(1, &format!("invite {name}")).await?.1) } else { None };
+                let me_name = as_name
+                    .or_else(|| std::env::var("USER").ok())
+                    .or_else(|| std::env::var("USERNAME").ok())
+                    .filter(|n| yo_cli::client::validate_name(n).is_ok())
+                    .unwrap_or_else(|| "friend".into());
 
                 c.add_open(&name, move |code| {
                     println!("{}", ui::rule(&format!("invite for {who}")));
-                    println!(" Give {who} this code (read it out, or send it somewhere you trust):");
-                    print_code(code, qr);
-                    println!(" They run:  {}", ui::bold(&format!("yo add <your-name> {code}")));
-                    println!(
-                        " {}",
-                        ui::dim("Waiting… the code works once and expires in 10 minutes (Ctrl-C to cancel).")
-                    );
+                    match &init_line {
+                        Some(init) => {
+                            println!(" Send {who} all of this, over a channel you trust:\n");
+                            println!("   {}", ui::dim("# 1. install (needs Rust; skip if they already have yo)"));
+                            println!("   {}", ui::bold("cargo install --git https://github.com/jsprada/yo yo-cli"));
+                            println!("   {}", ui::dim("# 2. join the server (asks for a passphrase), then add you:"));
+                            println!("   {} && \\", ui::bold(init));
+                            println!("   {}\n", ui::bold(&format!("yo add {me_name} {code}")));
+                            println!(
+                                " {}",
+                                ui::dim(&format!(
+                                    "The token works until used. The code works once and expires in 10 minutes while this \
+                                     command waits; if it expires, run `yo add {who}` again and send only the new code."
+                                ))
+                            );
+                        }
+                        None => {
+                            println!(" Give {who} this code (read it out, or send it somewhere you trust):");
+                            print_code(code, qr);
+                            println!(" They run:  {}", ui::bold(&format!("yo add {me_name} {code}")));
+                            println!(
+                                " {}",
+                                ui::dim("Waiting… the code works once and expires in 10 minutes (Ctrl-C to cancel).")
+                            );
+                        }
+                    }
+                    if qr && init_line.is_some() {
+                        print_code(code, true);
+                    }
                 })
                 .await?
             } else {

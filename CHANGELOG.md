@@ -8,6 +8,10 @@ All notable changes to yo! are recorded here. The format follows
 
 ### Added (administration from a client)
 
+- `yo add <name> --invite [--as NAME]`: on an admin device, mints a token and
+  prints one paste-able block for a newcomer — install, `yo init` with pin
+  and token, and `yo add <you> <code>`.
+
 - Devices can be administrators: `yo admin token [--uses N] [--note T]` mints
   a registration token and prints the full `yo init` line; `yo admin tokens`,
   `yo admin revoke`, `yo admin status` (version, uptime, counts, abuse

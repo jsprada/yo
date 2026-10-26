@@ -51,6 +51,13 @@ pub enum Cmd {
         /// Also show the code as a QR code.
         #[arg(long)]
         qr: bool,
+        /// Also mint a registration token (admin devices only) and print one
+        /// paste-able block with everything a newcomer needs.
+        #[arg(long, conflicts_with = "code")]
+        invite: bool,
+        /// With --invite: the name to suggest they call you (default: your login name).
+        #[arg(long = "as", value_name = "NAME")]
+        as_name: Option<String>,
     },
     /// Show new messages.
     Read,

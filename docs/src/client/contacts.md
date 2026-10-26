@@ -37,6 +37,33 @@ and alice's terminal says `✔ bob added …` at the same moment.
 - `yo add bob --qr` also shows the code as a QR code, handy in person: bob
   scans it with his phone's camera and reads it off the screen.
 
+### Inviting someone who isn't on the server yet
+
+If your device is an [administrator](../server/admin.md), one command does
+the whole invitation — registration token, server address and pin, and the
+contact code — as a single block to paste to them:
+
+```console
+$ yo add bob --invite
+ ── invite for bob ──────────────────────
+ Send bob all of this, over a channel you trust:
+
+   # 1. install (needs Rust; skip if they already have yo)
+   cargo install --git https://github.com/jsprada/yo yo-cli
+   # 2. join the server (asks for a passphrase), then add you:
+   yo init --server yo.example.com:7443 --pin sha256:… --token k7xq2m… && \
+   yo add johnny 48213-crossbow-marble-tundra
+
+ The token works until used. The code works once and expires in 10 minutes
+ while this command waits; if it expires, run `yo add bob` again and send
+ only the new code.
+```
+
+`--as NAME` sets the name they'll call you (it defaults to your login name;
+they can change it later with `yo rename`). Because the code is a live
+rendezvous, the practical order is: send the block, then stay on the line
+while they install and run it.
+
 ### Ways to share the code
 
 | Situation | How |

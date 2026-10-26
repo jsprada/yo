@@ -15,6 +15,7 @@ $ yo admin token --note alice
 
  They need Rust: cargo install --git https://github.com/jsprada/yo yo-cli
 
+$ yo add bob --invite          # token + init line + contact code in one paste (see Contacts)
 $ yo admin tokens
 $ yo admin revoke k7xq2m5v3t4bz7wlnhgjc2ue4a
 $ yo admin status
