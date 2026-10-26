@@ -31,6 +31,13 @@ For contributors and the curious. Source: `crates/yo-proto`.
 | `Deregister { device, ts, authority, sig }` | Remove a device's registration, memberships, keys and queue; only the bound authority may. |
 | `MailboxOpen` / `MailboxJoin` / `MailboxPut` / `MailboxGet` / `MailboxClose` | Invite rendezvous (single joiner, long-poll get, 10-minute TTL). |
 | `Ping` | Keep-alive. |
+| `AdminCreateToken { uses, note }` / `AdminListTokens` / `AdminRevokeToken { token }` / `AdminStatus` | Administration, allowed only for devices whose registration carries the `admin` flag; same connection and authentication as everything else. → `Token`, `Tokens`, `AdminStatus`. Client-minted tokens never grant admin. |
+
+Besides the network protocol, the server can expose a **local status
+socket** (`status_socket` in `server.toml`, a Unix socket): each connection
+receives one JSON line — `service`, `version`, `protocol`, `started_at`,
+`now` — and nothing is read. The status page polls it; it is group-only and
+never reachable over the network.
 
 Errors come back as `Response::Error { code, message }` with `code` one of
 `BadRequest, RegistrationRequired, Unauthorized, NotFound, Burned, Conflict,

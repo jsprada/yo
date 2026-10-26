@@ -450,7 +450,24 @@ advice to remove immediately. A rotation reaches a contact only once they
 sync; until then their sends to the retired inbox trigger the automatic
 sync-and-retry.
 
-## 5. Still open
+## 5. Additions after the review
+
+Features added after 2026-10-25 that the original review did not examine.
+Each was designed against the same threat model; their properties are
+documented in `docs/src/reference/security.md` ("Administration and the
+status page") and summarized here for the audit trail.
+
+| Addition | New surface | Controls |
+|---|---|---|
+| Administrator devices (`yo admin token\|tokens\|revoke\|status`) | four requests on the existing mTLS protocol | `admin` flag on the registration record (operator-set, or via a `--admin` token); removed by deregistration; client-minted tokens never grant admin; 10 mints/min per device; logged by device id; power limited to admitting devices |
+| `yo-server` status socket | a local Unix socket, group-only | answers one JSON line (version, protocol, start time); reads nothing; no network exposure |
+| `yo-status` page | HTTPS on 443 | separate unprivileged user (group `yo` only, cannot read DB or keys); GET-only; no scripts; strict CSP/HSTS; serves from a once-a-minute cache so views never reach the server; Let's Encrypt via TLS-ALPN (no port 80); hardened unit with only `CAP_NET_BIND_SERVICE` |
+| Deployment scripts | none at runtime | tested end to end on Debian 13 with systemd; SSH hardening only when a key is authorized |
+| Client request timeout (90 s) | — | turns a stalled connection into an error instead of a hang |
+
+These should be in scope for the independent audit below.
+
+## 6. Still open
 
 - **An independent audit of the protocol, the server and the storage format.**
   Every finding from the review is now fixed or accepted; this is the one

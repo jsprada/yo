@@ -34,6 +34,10 @@ $ yo reply 12 "yes, see you there"
   rest alone.
 - **Easy key exchange:** `yo add bob` shows `48213-crossbow-marble-tundra`; read
   it to bob over the phone. SPAKE2 means not even the server can intercept it.
+- **Admin from your client:** `yo admin token` mints an invitation for a new
+  person over the same mutual-TLS connection — no SSH, no web login.
+- **Optional status page:** a read-only HTTPS page with a green/yellow/red
+  LED, deployed version and uptime, fed by a local socket.
 - **Prompt indicator:** `yo!(3)` in bash, zsh, fish or PowerShell.
 
   ![bash prompt showing yo!(2) after two messages arrive](docs/src/img/prompt-bash.svg)
@@ -47,7 +51,7 @@ cargo build --release -p yo-server                          # the server (Linux)
 
 # server
 yo-server --dir ./srv init --host yo.example.com
-yo-server --dir ./srv token create
+yo-server --dir ./srv token create --admin   # your own token; later tokens come from `yo admin token`
 yo-server --dir ./srv run
 
 # each person

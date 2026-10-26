@@ -13,6 +13,7 @@ With `YO_HOME` set, they're all in that one directory.
 | `device.crt`, `device.key` | this device's TLS client certificate/key (mode 0600) | no (see below) |
 | `spool/*.env` | downloaded envelopes not yet decrypted | yes (end-to-end ciphertext) |
 | `unread`, `unread.db` | unread counter for the prompt (a number) | no |
+| `inboxes` | this device's inbox ids, one per line, so the daemon can ignore junk addressed to inboxes it doesn't have; inbox ids are already known to the server | no |
 | `daemon.log`, `daemon.pid` | daemon log and process id | no |
 | `yo.lock` | prevents two `yo` commands writing at once | — |
 | `compose-<pid>.txt` | a message draft, only while your editor is open, then wiped; written under `$XDG_RUNTIME_DIR` (RAM) when available | no |

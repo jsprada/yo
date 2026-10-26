@@ -134,6 +134,9 @@ file.
       The DB holds only ciphertext and public keys, but encrypt the backup
       anyway; it reveals who-talks-to-whom.
 - [ ] `dpkg-reconfigure -plow unattended-upgrades` → yes.
+- [ ] (Optional) Status page: `install.sh --status-site DOMAIN --acme-email
+      EMAIL` sets it up; open 443 in the provider firewall too. See
+      [Status page](status-page.md).
 - [ ] Decide how you'll update `yo-server` itself: `git pull && cargo build
       --release -p yo-server && install … && systemctl restart yo-server`.
       Write it down.
@@ -142,9 +145,16 @@ file.
 
 Do this with one other person, or with your laptop and a second machine.
 
-- [ ] Make a token per person (`--uses 2` if someone has two devices):
+- [ ] Make **your own** token with `--admin`, so your device can mint all
+      later tokens from your laptop (`yo admin token`) without SSH:
+      ```sh
+      sudo -u yo yo-server --dir /var/lib/yo-server token create --admin --note "me"
+      ```
+      Tokens for others, from the server (`--uses 2` if someone has two
+      devices) or from your admin device:
       ```sh
       sudo -u yo yo-server --dir /var/lib/yo-server token create --note "alice"
+      yo admin token --note alice        # on your laptop, once it is registered as admin
       ```
 - [ ] Send each person, **over a channel you trust** (in person, a phone
       call, or an app you already consider private), the one line from

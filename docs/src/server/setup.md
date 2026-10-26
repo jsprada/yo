@@ -123,6 +123,7 @@ pinned = true                  # false when cert is CA-issued
 registration = "token"         # "token" or "open"
 message_ttl_days = 30          # undelivered envelopes are deleted after this
 max_devices = 16               # devices per person per conversation
+# status_socket = "/run/yo-server/status.sock"   # local socket for the status page (optional)
 
 [limits]                       # abuse limits; all optional, defaults shown
 connections_per_ip = 32                 # concurrent, checked before TLS
@@ -266,11 +267,16 @@ yo-server --dir /var/lib/yo-server stats
 
 ```text
         registered devices: 4
+            administrators: 1
+            unspent tokens: 2
               live inboxes: 9
   burned inboxes (markers): 1
           queued envelopes: 3
              one-time keys: 180
 ```
+
+Administrators (devices allowed to mint tokens from their own client) can
+read the same numbers plus the abuse counters with `yo admin status`.
 
 `stats` reports the database (it's a separate process from the running
 server). The running server also logs a counter line once a minute, which is
@@ -308,7 +314,8 @@ since the server started and contain no per-user information.
 
 | Data | Retention |
 |---|---|
-| Registered device IDs (hash of each device's TLS public key) | until removed manually |
+| Registered device IDs (hash of each device's TLS public key), an admin flag, and the key allowed to deregister each device | until deregistered |
+| Registration tokens (random strings, a note, uses left) | until spent or revoked |
 | Inboxes: ID + signed device list (public keys) | until burned |
 | One-time public keys | until claimed |
 | Envelopes (end-to-end ciphertext, padded) | until the recipient acknowledges them, at most `message_ttl_days` |

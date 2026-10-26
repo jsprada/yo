@@ -37,6 +37,48 @@ Just run the same command again.
   next `yo init` starts over. It reuses the device certificate that was
   already registered, so it doesn't need another registration token.
 
+### "this device is not an administrator of the server"
+
+`yo admin …` only works on a device the operator flagged. On the server:
+`yo-server --dir /var/lib/yo-server admin grant <device id>`, where the id
+is the `device id:` line of `yo status` on that device (the first few
+characters are enough). Or register the device with a token created with
+`--admin`.
+
+### "the server did not understand that request"
+
+Your client is newer than the server (admin commands, say, against a server
+from before they existed). Update the server: `yo-server-update` over SSH.
+
+### "no reply from the server to … within 90s"
+
+The connection stalled; the client gave up and will reconnect on the next
+command. Check `yo status` and, on the server, `systemctl status yo-server`
+and `journalctl -u yo-server -n 50`.
+
+### On the server: "cannot read /root/.local/share/yo-server/server.toml"
+
+A `yo-server` command ran without `--dir /var/lib/yo-server` and so used an
+empty per-user directory — and **a token created that way is invisible to
+the running service**. Newer builds prefer `/var/lib/yo-server`
+automatically when it exists and the installer exports `YO_SERVER_DIR`; if
+in doubt pass `--dir`. Don't run `yo-server run` by hand: systemd runs it.
+
+### SSH: "Permission denied (publickey)"
+
+The server only accepts keys and your client didn't offer one it knows.
+`ssh -v root@host 2>&1 | grep -E "Offering|denied"` shows what was tried;
+`ssh-add -l` shows what's loaded. If you're locked out, use your provider's
+console (Linode: LISH), check `/root/.ssh/authorized_keys`, and if needed
+remove `/etc/ssh/sshd_config.d/10-yo-hardening.conf` and
+`systemctl reload ssh` to re-enable passwords temporarily.
+
+### gpg: "Inappropriate ioctl for device"
+
+gpg over SSH can't find a terminal for its passphrase prompt. Run
+`export GPG_TTY=$(tty)` first and add `--pinentry-mode loopback`; delete any
+0-byte output file the failed attempt left behind.
+
 ### "yo! is locked. Run `yo unlock` first"
 
 The command wasn't run in a terminal (so it couldn't ask for your

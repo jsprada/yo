@@ -487,7 +487,9 @@ locked out: each client adds the new pin under `extra_pins` in `config.toml`
 | Logs | `journalctl -u yo-server` |
 | Abuse counters | `journalctl -u yo-server | grep metrics` |
 | DB stats | `sudo -u yo yo-server --dir /var/lib/yo-server stats` |
-| Tokens | `sudo -u yo yo-server --dir /var/lib/yo-server token …` |
+| Tokens | `sudo -u yo yo-server --dir /var/lib/yo-server token …`, or `yo admin token` from an admin device |
+| Administrators | `sudo -u yo yo-server --dir /var/lib/yo-server admin grant\|revoke\|list` |
+| Status page | `systemctl status yo-status`, `https://<status-site>/status.json` |
 | Client command line to hand out | `sudo -u yo yo-server --dir /var/lib/yo-server info` |
 | Bans | `fail2ban-client status yo-server` |
 | Backups | `/var/backups/yo-server/` (timer, nightly 03:00) |

@@ -49,6 +49,12 @@ All notable changes to yo! are recorded here. The format follows
 
 ### Docs
 
+- Consistency pass over all pages after the admin, status-page and deployment
+  work: quick start and README lead with an `--admin` token; `stats` sample,
+  `server.toml` and protocol references updated; security model covers
+  administrators and the status page; troubleshooting gains the real-world
+  entries from the first deployment (data directory, SSH, gpg, admin
+  errors); remediation log records the post-review additions.
 - Rendered terminal examples of the prompt indicator (bash and fish) in the
   prompt page, the introduction and the README.
 - `yo status` labels the device id as such (it is what `yo-server admin

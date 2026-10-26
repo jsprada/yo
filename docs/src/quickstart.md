@@ -16,7 +16,8 @@ cargo build --release
 
 ```sh
 yo-server --dir ./srv init --host localhost
-yo-server --dir ./srv token create --uses 2      # prints a registration token
+yo-server --dir ./srv token create --admin       # your token: the device becomes an administrator
+yo-server --dir ./srv token create               # a token for the second person
 yo-server --dir ./srv run
 ```
 
@@ -55,7 +56,15 @@ yo bob "hey bob!"                              yo read
 yo read
 ```
 
-## 6. Prompt indicator
+## 6. Inviting more people
+
+From the administrator device, no server access needed:
+
+```sh
+yo admin token --note carol     # prints the complete `yo init …` line to send carol
+```
+
+## 7. Prompt indicator
 
 ```sh
 yo daemon install            # notifier + passphrase cache, starts at login
