@@ -7,6 +7,13 @@ use yo_server::db::Db;
 use yo_server::{Config, Registration, Server};
 
 fn default_dir() -> PathBuf {
+    // The conventional service location wins when it exists and no --dir /
+    // YO_SERVER_DIR was given, so an admin's bare `yo-server token create`
+    // acts on the running server rather than on an empty per-user directory.
+    let system = PathBuf::from("/var/lib/yo-server");
+    if system.join("server.toml").exists() {
+        return system;
+    }
     directories::ProjectDirs::from("", "", "yo-server")
         .map(|d| d.data_dir().to_path_buf())
         .unwrap_or_else(|| PathBuf::from("yo-server-data"))

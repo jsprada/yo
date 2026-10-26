@@ -375,6 +375,13 @@ at rest.
 # yo-server --dir /tmp/restore stats && rm -rf /tmp/restore
 ```
 
+> **Every `yo-server` command must act on the service's data directory.**
+> The installer sets `YO_SERVER_DIR=/var/lib/yo-server` for login shells and
+> the binary prefers that directory when it exists, but if in doubt pass
+> `--dir /var/lib/yo-server` explicitly. A bare `yo-server token create`
+> against the wrong directory creates a token the running server never sees.
+> And don't run `yo-server run` by hand: systemd already runs it.
+
 ## 8. Registration tokens — one per person
 
 ```sh

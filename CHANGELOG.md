@@ -19,6 +19,13 @@ All notable changes to yo! are recorded here. The format follows
 - `yo-server --version` and the status page include the git SHA the binary
   was built from when built by the deploy scripts.
 
+### Changed (deployment)
+
+- `yo-server` prefers `/var/lib/yo-server` as its data directory when that
+  exists and no `--dir`/`YO_SERVER_DIR` is given, and the installer exports
+  `YO_SERVER_DIR` for login shells, so a bare `yo-server token create` acts on
+  the running server instead of an empty per-user directory.
+
 ### Added (deployment)
 
 - `deploy/install.sh`: one-shot, re-runnable installer for Debian 12/13 —

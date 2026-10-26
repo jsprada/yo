@@ -573,6 +573,16 @@ EOF
   ok "yo-status running on 443 (${STATUS_TLS})"
 fi
 
+# ── 11c. make bare `yo-server …` commands use the right data directory ────────
+cat > /etc/profile.d/yo-server.sh <<EOF
+$MARKER
+# So that `yo-server token create` etc. act on the running server's data,
+# not on a per-user default directory.
+export YO_SERVER_DIR=$DATA_DIR
+EOF
+chmod 0644 /etc/profile.d/yo-server.sh
+export YO_SERVER_DIR="$DATA_DIR"
+
 # ── 12. updater + settings ────────────────────────────────────────────────────
 log "Updater"
 install -m 0755 "$SRC_DIR/deploy/update.sh" "$UPDATE_BIN"
