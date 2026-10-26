@@ -35,6 +35,8 @@ $ yo reply 12 "yes, see you there"
 - **Easy key exchange:** `yo add bob` shows `48213-crossbow-marble-tundra`; read
   it to bob over the phone. SPAKE2 means not even the server can intercept it.
 - **Prompt indicator:** `yo!(3)` in bash, zsh, fish or PowerShell.
+
+  ![bash prompt showing yo!(2) after two messages arrive](docs/src/img/prompt-bash.svg)
 - **Multiple devices**, on Linux, macOS and Windows.
 
 ## Quick start

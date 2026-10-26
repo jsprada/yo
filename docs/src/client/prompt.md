@@ -2,9 +2,11 @@
 
 Add a little `yo!(3)` to your shell prompt when messages are waiting:
 
-```text
-yo!(3) johnny@laptop ~/src $
-```
+![bash prompt showing yo!(2) after two messages arrive, then yo read](../img/prompt-bash.svg)
+
+In fish the indicator sits on the right-hand side:
+
+![fish prompt showing yo!(3) on the right](../img/prompt-fish.svg)
 
 ## Setup
 

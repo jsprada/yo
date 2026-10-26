@@ -1,0 +1,27 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="760" height="534" viewBox="0 0 760 534" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="14">
+<rect width="760" height="534" rx="10" fill="#1e1f22"/>
+<rect width="760" height="36" rx="10" fill="#2b2d31"/><rect y="20" width="760" height="16" fill="#2b2d31"/>
+<circle cx="20" cy="18" r="6" fill="#ff5f57"/><circle cx="40" cy="18" r="6" fill="#febc2e"/><circle cx="60" cy="18" r="6" fill="#28c840"/>
+<text x="380.0" y="23" text-anchor="middle" fill="#9a9da3" font-size="12">bash — ~/src</text>
+<text x="18" y="68" xml:space="preserve"><tspan fill="#7bd88f">johnny@laptop</tspan><tspan fill="#5fd7ff"> ~/src </tspan><tspan fill="#e6e6e6">$ </tspan><tspan fill="#e6e6e6">cargo test</tspan></text>
+<text x="18" y="90" xml:space="preserve"><tspan fill="#8b8e94">    Finished `test` profile [unoptimized + debuginfo] target(s) in 4.21s</tspan></text>
+<text x="18" y="112" xml:space="preserve"><tspan fill="#8b8e94">test result: ok. 31 passed; 0 failed; 0 ignored</tspan></text>
+<text x="18" y="134" xml:space="preserve"><tspan fill="#7bd88f">johnny@laptop</tspan><tspan fill="#5fd7ff"> ~/src </tspan><tspan fill="#e6e6e6">$ </tspan><tspan fill="#e6e6e6">git status -sb</tspan></text>
+<text x="18" y="156" xml:space="preserve"><tspan fill="#8b8e94">## main...origin/main</tspan></text>
+<text x="18" y="178" xml:space="preserve"><tspan fill="#f1c40f" font-weight="bold">yo!(1) </tspan><tspan fill="#7bd88f">johnny@laptop</tspan><tspan fill="#5fd7ff"> ~/src </tspan><tspan fill="#e6e6e6">$ </tspan><tspan fill="#e6e6e6"></tspan></text>
+<text x="18" y="200" xml:space="preserve"><tspan fill="#e6e6e6"></tspan></text>
+<text x="18" y="222" xml:space="preserve"><tspan fill="#8b8e94">        ↑ a message arrived while you were working</tspan></text>
+<text x="18" y="244" xml:space="preserve"><tspan fill="#e6e6e6"></tspan></text>
+<text x="18" y="266" xml:space="preserve"><tspan fill="#f1c40f" font-weight="bold">yo!(2) </tspan><tspan fill="#7bd88f">johnny@laptop</tspan><tspan fill="#5fd7ff"> ~/src </tspan><tspan fill="#e6e6e6">$ </tspan><tspan fill="#e6e6e6">yo read</tspan></text>
+<text x="18" y="288" xml:space="preserve"><tspan fill="#f1c40f" font-weight="bold"> yo!</tspan><tspan fill="#8b8e94"> ── 2 new</tspan></text>
+<text x="18" y="310" xml:space="preserve"><tspan fill="#e6e6e6"> ┌ </tspan><tspan fill="#f1c40f" font-weight="bold">#12</tspan><tspan fill="#e6e6e6"> </tspan><tspan fill="#5fd7ff">alice</tspan><tspan fill="#e6e6e6"> · </tspan><tspan fill="#8b8e94">2m ago</tspan></text>
+<text x="18" y="332" xml:space="preserve"><tspan fill="#e6e6e6"> │ lunch at noon?</tspan></text>
+<text x="18" y="354" xml:space="preserve"><tspan fill="#e6e6e6"> └ </tspan><tspan fill="#8b8e94">↩ yo reply 12 …</tspan></text>
+<text x="18" y="376" xml:space="preserve"><tspan fill="#e6e6e6"> ┌ </tspan><tspan fill="#f1c40f" font-weight="bold">#13</tspan><tspan fill="#e6e6e6"> </tspan><tspan fill="#5fd7ff">bob</tspan><tspan fill="#e6e6e6"> · </tspan><tspan fill="#8b8e94">just now</tspan></text>
+<text x="18" y="398" xml:space="preserve"><tspan fill="#e6e6e6"> │ </tspan><tspan fill="#8b8e94">↪ re #9: did you push the fix?</tspan></text>
+<text x="18" y="420" xml:space="preserve"><tspan fill="#e6e6e6"> │ yes, it&#x27;s in</tspan></text>
+<text x="18" y="442" xml:space="preserve"><tspan fill="#e6e6e6"> └ </tspan><tspan fill="#8b8e94">↩ yo reply 13 …</tspan></text>
+<text x="18" y="464" xml:space="preserve"><tspan fill="#7bd88f">johnny@laptop</tspan><tspan fill="#5fd7ff"> ~/src </tspan><tspan fill="#e6e6e6">$ </tspan><tspan fill="#e6e6e6">yo reply 12 </tspan><tspan fill="#e6e6e6">&quot;yes — usual place&quot;</tspan></text>
+<text x="18" y="486" xml:space="preserve"><tspan fill="#7bd88f">✔ </tspan><tspan fill="#e6e6e6">replied to </tspan><tspan fill="#5fd7ff">alice</tspan><tspan fill="#8b8e94"> (2 devices)</tspan></text>
+<text x="18" y="508" xml:space="preserve"><tspan fill="#7bd88f">johnny@laptop</tspan><tspan fill="#5fd7ff"> ~/src </tspan><tspan fill="#e6e6e6">$ </tspan><tspan fill="#e6e6e6"></tspan></text>
+</svg>

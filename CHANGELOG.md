@@ -49,6 +49,10 @@ All notable changes to yo! are recorded here. The format follows
 
 ### Docs
 
+- Rendered terminal examples of the prompt indicator (bash and fish) in the
+  prompt page, the introduction and the README.
+- `yo status` labels the device id as such (it is what `yo-server admin
+  grant` takes).
 - `DEPLOYMENT.md`: a copy-paste runbook with every command and config file
   (nftables, systemd unit, fail2ban, backups, tokens, client setup).
 - First deployment checklist (`docs/src/server/deploy.md`): recommended

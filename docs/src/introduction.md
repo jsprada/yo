@@ -43,7 +43,9 @@ $ yo reply 12 "yes, see you there"
   types it in. Keys are exchanged with a password-authenticated key exchange
   (SPAKE2), so not even the server can intercept them.
 - **A prompt indicator.** Paste a snippet into your shell config and your
-  prompt shows `yo!(3)` when messages are waiting.
+  prompt shows `yo!(3)` when messages are waiting:
+
+  ![bash prompt showing yo!(2) after two messages arrive](img/prompt-bash.svg)
 - **Multiple devices** per person, on Linux, macOS and Windows.
 
 ## How it fits together

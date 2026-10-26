@@ -674,7 +674,10 @@ async fn status(paths: &Paths) -> anyhow::Result<()> {
     println!(" server:   {}", cfg.server);
     println!(" pin:      {}", cfg.pin.as_deref().unwrap_or("(web PKI)"));
     match yo_proto::tls::load_chain_file(&paths.tls_cert()).ok().and_then(|c| yo_proto::tls::spki_hash(&c[0]).ok()) {
-        Some(h) => println!(" device:   {}", yo_proto::DeviceId::from_spki_hash(&h).short()),
+        Some(h) => println!(
+            " device id: {}  (what `yo-server admin grant` takes)",
+            yo_proto::DeviceId::from_spki_hash(&h).short()
+        ),
         None => println!(" device:   {}", ui::red("certificate missing")),
     }
     println!(" data:     {}", paths.data_dir.display());
