@@ -65,8 +65,10 @@ yo prompt bash >> ~/.bashrc    # prompt indicator
 
 ## Documentation
 
-The full documentation is in [`docs/`](docs/src/SUMMARY.md) and builds into a
-website with [mdBook](https://rust-lang.github.io/mdBook/):
+The full documentation is published at **<https://jsprada.github.io/yo/>**
+(rebuilt from `docs/` on every push to `main`). The same pages read fine on
+GitHub, starting from [`docs/src/SUMMARY.md`](docs/src/SUMMARY.md), or
+locally with [mdBook](https://rust-lang.github.io/mdBook/):
 
 ```sh
 cargo install mdbook

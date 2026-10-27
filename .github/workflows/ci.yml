@@ -90,6 +90,24 @@ jobs:
         with:
           path: docs/book
 
+  # Publishes the mdBook built above to GitHub Pages
+  # (https://jsprada.github.io/yo/). Only on pushes to main, and only this
+  # job gets the pages/id-token permissions.
+  pages:
+    name: publish docs
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    needs: docs
+    runs-on: ubuntu-latest
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deploy.outputs.page_url }}
+    steps:
+      - id: deploy
+        uses: actions/deploy-pages@d6db90164ac5ed86f2b6aed7e0febac5b3c0c03e # v4
+
   audit:
     name: dependency audit
     runs-on: ubuntu-latest

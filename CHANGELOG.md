@@ -53,6 +53,10 @@ All notable changes to yo! are recorded here. The format follows
 
 ### Docs
 
+- The documentation is published at <https://jsprada.github.io/yo/>. A new
+  `publish docs` CI job deploys the mdBook (built by the existing `docs` job)
+  to GitHub Pages on every push to `main`; it is the only job with
+  `pages`/`id-token` permissions and uses a SHA-pinned `actions/deploy-pages`.
 - Consistency pass over all pages after the admin, status-page and deployment
   work: quick start and README lead with an `--admin` token; `stats` sample,
   `server.toml` and protocol references updated; security model covers
